@@ -47,8 +47,10 @@ export interface BattleRound {
   round: number;
   att: BattleSide | null;
   def: BattleSide | null;
-  /** 수비 빈 라운드에 예비대가 입은 피해 */
+  /** 수비 예비대가 입은 피해 (수비 대기 라운드 또는 압도당한 라운드) */
   reserveLoss: number;
+  /** 공격 예비대가 입은 피해 (공격측이 압도당한 라운드) */
+  attReserveLoss: number;
   wallDamage: number;
   attRemaining: number;
   defRemaining: number;

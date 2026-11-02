@@ -142,3 +142,14 @@ describe('battle resolution', () => {
     expect(validateOrders(s, 'liubiao', [{ type: 'draft', general: 'cai_mao', amount: 500, unit: 'navy' }]).ok).toBe(true);
   });
 });
+
+describe('overwhelm spill', () => {
+  it('trickling a thin defense lets a massive commitment hit the reserve', () => {
+    const thin = P(...Array.from({ length: 10 }, () => ['spear', 300] as [RoundPlan['unit'], number]));
+    const s = attack(arena({ spear: 8000 }, thin), { spear: 20000 }, P(...Array.from({ length: 10 }, () => ['spear', 15000] as [RoundPlan['unit'], number])));
+    const r = s.battles[0];
+    expect(r.rounds[0].reserveLoss).toBeGreaterThan(0);
+    expect(r.rounds[0].attReserveLoss).toBe(0);
+    expect(r.outcome).toBe('captured');
+  });
+});

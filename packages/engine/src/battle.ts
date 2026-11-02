@@ -15,6 +15,7 @@ import {
   BATTLE_ROUNDS,
   EMPTY_ROUND_RESERVE_RATE,
   MATCHUP,
+  OVERWHELM_RATIO,
   SIEGE_WALL_MUL,
   UNIT_LABEL,
   UNIT_TYPES,
@@ -249,6 +250,7 @@ export function resolveBattle(state: GameState, army: Army, targetId: string, rn
       att: aCount > 0 ? { general: aGen?.id ?? null, unit: ap!.unit, count: aCount, loss: 0 } : null,
       def: dCount > 0 ? { general: dGen?.id ?? null, unit: dp!.unit, count: dCount, loss: 0 } : null,
       reserveLoss: 0,
+      attReserveLoss: 0,
       wallDamage: 0,
       attRemaining: 0,
       defRemaining: 0,
@@ -278,6 +280,13 @@ export function resolveBattle(state: GameState, army: Army, targetId: string, rn
         def[dp!.unit] -= bLoss;
         (round.att as BattleSide).loss = aLoss;
         (round.def as BattleSide).loss = bLoss;
+        // 압도: 초과 전투력이 상대 예비대로 넘친다
+        const dPower = dCount * dQ;
+        if (aPower > dPower * OVERWHELM_RATIO) {
+          round.reserveLoss = removeProportional(def, Math.round((aPower - dPower * OVERWHELM_RATIO) * EMPTY_ROUND_RESERVE_RATE * rng.range(0.9, 1.1)));
+        } else if (dPower > aPower * OVERWHELM_RATIO) {
+          round.attReserveLoss = removeProportional(att, Math.round((dPower - aPower * OVERWHELM_RATIO) * EMPTY_ROUND_RESERVE_RATE * rng.range(0.9, 1.1)));
+        }
         if (ap!.unit === 'siege') wallDamage = (aPower / WALL_DAMAGE_DIV) * SIEGE_WALL_MUL * 0.5;
       } else {
         // 수비가 비운 라운드: 예비대와 성벽 타격

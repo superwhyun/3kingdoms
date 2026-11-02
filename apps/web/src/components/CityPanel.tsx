@@ -1,6 +1,22 @@
 import { useMemo, useState } from 'react';
-import { DEVELOP_COST, MAX_ATTACK_GENERALS, tradeRate, type Command, type GameView, type GeneralView } from '@ch/engine';
+import {
+  DEVELOP_COST,
+  MAX_ATTACK_GENERALS,
+  UNIT_LABEL,
+  UNIT_TYPES,
+  draftCost,
+  emptyUnits,
+  sumUnits,
+  tradeRate,
+  type Command,
+  type GameView,
+  type GeneralView,
+  type RoundPlan,
+  type UnitType,
+  type Units,
+} from '@ch/engine';
 import { actorsOf } from './describe';
+import { PlanEditor, UnitInputs, compactUnits, padPlan, presetPlan } from './PlanEditor';
 
 interface Props {
   view: GameView;
@@ -10,7 +26,7 @@ interface Props {
   canCommand: boolean;
 }
 
-type Action = 'develop' | 'draft' | 'train' | 'trade' | 'search' | 'recruit' | 'move' | 'transport' | 'attack' | 'reward' | 'release';
+type Action = 'develop' | 'draft' | 'train' | 'trade' | 'search' | 'recruit' | 'move' | 'transport' | 'attack' | 'defense' | 'reward' | 'release';
 
 const ACTIONS: { id: Action; label: string }[] = [
   { id: 'develop', label: '개발' },
@@ -23,6 +39,7 @@ const ACTIONS: { id: Action; label: string }[] = [
   { id: 'move', label: '이동' },
   { id: 'transport', label: '수송' },
   { id: 'attack', label: '출진' },
+  { id: 'defense', label: '수비 전략' },
   { id: 'release', label: '포로 석방' },
 ];
 
@@ -62,7 +79,12 @@ export function CityPanel({ view, cityId, orders, onAdd, canCommand }: Props) {
   const [amount, setAmount] = useState(1000);
   const [gold, setGold] = useState(100);
   const [food, setFood] = useState(0);
-  const [troops, setTroops] = useState(0);
+  const [sendUnits, setSendUnits] = useState<Partial<Units>>({});
+  const [draftUnit, setDraftUnit] = useState<UnitType>('spear');
+  const [attackPlan, setAttackPlan] = useState<RoundPlan[]>(padPlan([]));
+  const [defPlan, setDefPlan] = useState<RoundPlan[]>(() =>
+    city.defensePlan ? padPlan(city.defensePlan) : presetPlan(city.units ?? emptyUnits(), 'even'),
+  );
   const [tradeAction, setTradeAction] = useState<'buy' | 'sell'>('buy');
   const [target, setTarget] = useState('');
   const [to, setTo] = useState('');
@@ -74,7 +96,7 @@ export function CityPanel({ view, cityId, orders, onAdd, canCommand }: Props) {
   const rulers = new Set(view.factions.map((f) => f.ruler));
 
   const submit = () => {
-    const needGen = !['reward', 'release', 'attack'].includes(action);
+    const needGen = !['reward', 'release', 'attack', 'defense'].includes(action);
     if (needGen && !gen) return;
     const gid = gen?.id ?? '';
     let cmd: Command | null = null;
@@ -83,7 +105,7 @@ export function CityPanel({ view, cityId, orders, onAdd, canCommand }: Props) {
         cmd = { type: 'develop', general: gid, field };
         break;
       case 'draft':
-        cmd = { type: 'draft', general: gid, amount };
+        cmd = { type: 'draft', general: gid, amount, unit: draftUnit };
         break;
       case 'train':
         cmd = { type: 'train', general: gid };
@@ -116,19 +138,23 @@ export function CityPanel({ view, cityId, orders, onAdd, canCommand }: Props) {
       }
       case 'transport': {
         const d = to || ownNeighbors[0]?.id;
-        if (d) cmd = { type: 'transport', general: gid, to: d, gold, food, troops };
+        if (d) cmd = { type: 'transport', general: gid, to: d, gold, food, units: compactUnits(sendUnits) };
         break;
       }
       case 'attack': {
         const d = to || hostileNeighbors[0]?.id;
         const gens = army.filter((id) => free.some((g) => g.id === id));
-        if (d && gens.length) cmd = { type: 'attack', generals: gens, to: d, troops, food };
+        if (d && gens.length) cmd = { type: 'attack', generals: gens, to: d, units: compactUnits(sendUnits), food, plan: attackPlan };
         break;
       }
+      case 'defense':
+        cmd = { type: 'setDefense', city: cityId, plan: defPlan };
+        break;
     }
     if (cmd) {
       onAdd(cmd);
       setArmy([]);
+      setSendUnits({});
     }
   };
 
@@ -162,6 +188,23 @@ export function CityPanel({ view, cityId, orders, onAdd, canCommand }: Props) {
             <td>
               {fmt(city.troops)}
               {city.intel === 'near' && <span className="muted"> (추정)</span>}
+            </td>
+          </tr>
+          {city.units && (
+            <tr>
+              <td colSpan={4} className="units-line">
+                {UNIT_TYPES.filter((t) => city.units![t] > 0).map((t) => (
+                  <span key={t} className={`unit-tag u-${t}`}>
+                    {UNIT_LABEL[t]} {city.units![t].toLocaleString()}
+                  </span>
+                ))}
+              </td>
+            </tr>
+          )}
+          <tr>
+            <th>강</th>
+            <td colSpan={3}>
+              {city.rivers.length ? city.rivers.map((id) => view.cities.find((c) => c.id === id)?.name).join(', ') : '-'}
             </td>
           </tr>
           <tr>
@@ -224,7 +267,7 @@ export function CityPanel({ view, cityId, orders, onAdd, canCommand }: Props) {
             ))}
           </div>
 
-          {!['reward', 'release', 'attack'].includes(action) && (
+          {!['reward', 'release', 'attack', 'defense'].includes(action) && (
             <label>
               담당 장수
               <select value={gen?.id ?? ''} onChange={(e) => setGeneral(e.target.value)}>
@@ -250,10 +293,22 @@ export function CityPanel({ view, cityId, orders, onAdd, canCommand }: Props) {
             </label>
           )}
           {action === 'draft' && (
-            <label>
-              징병 수 (금 {Math.ceil(amount / 10)}, 최대 {Math.floor(city.population / 20).toLocaleString()})
-              <input type="number" step={100} min={100} value={amount} onChange={(e) => setAmount(Number(e.target.value))} />
-            </label>
+            <>
+              <label>
+                병종
+                <select value={draftUnit} onChange={(e) => setDraftUnit(e.target.value as UnitType)}>
+                  {UNIT_TYPES.map((t) => (
+                    <option key={t} value={t} disabled={t === 'navy' && city.rivers.length === 0}>
+                      {UNIT_LABEL[t]} (1000명당 금 {draftCost(t, 1000)}){t === 'navy' && city.rivers.length === 0 ? ' — 강 없음' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                징병 수 (금 {draftCost(draftUnit, amount || 0)}, 최대 {Math.floor(city.population / 20).toLocaleString()})
+                <input type="number" step={100} min={100} value={amount} onChange={(e) => setAmount(Number(e.target.value))} />
+              </label>
+            </>
           )}
           {action === 'trade' && (
             <>
@@ -339,12 +394,9 @@ export function CityPanel({ view, cityId, orders, onAdd, canCommand }: Props) {
                 군량
                 <input type="number" min={0} value={food} onChange={(e) => setFood(Number(e.target.value))} />
               </label>
-              <label>
-                병사
-                <input type="number" min={0} value={troops} onChange={(e) => setTroops(Number(e.target.value))} />
-              </label>
             </div>
           )}
+          {action === 'transport' && <UnitInputs value={sendUnits} onChange={setSendUnits} max={city.units ?? emptyUnits()} />}
           {action === 'attack' && (
             <>
               <label>
@@ -372,20 +424,43 @@ export function CityPanel({ view, cityId, orders, onAdd, canCommand }: Props) {
                   </button>
                 ))}
               </div>
-              <div className="row3">
-                <label>
-                  병력 (보유 {fmt(city.troops)})
-                  <input type="number" min={1} value={troops} onChange={(e) => setTroops(Number(e.target.value))} />
-                </label>
-                <label>
-                  군량 (라운드당 병력/200)
-                  <input type="number" min={0} value={food} onChange={(e) => setFood(Number(e.target.value))} />
-                </label>
+              <div className="muted">출진 병력</div>
+              <UnitInputs value={sendUnits} onChange={setSendUnits} max={city.units ?? emptyUnits()} />
+              <label>
+                군량 (라운드당 출진 병력/200 소모, 10라운드 약 {Math.ceil(sumUnits({ ...emptyUnits(), ...sendUnits }) / 200) * 10})
+                <input type="number" min={0} value={food} onChange={(e) => setFood(Number(e.target.value))} />
+              </label>
+              <h3>10라운드 공격 전략</h3>
+              <PlanEditor
+                plan={attackPlan}
+                onChange={setAttackPlan}
+                units={{ ...emptyUnits(), ...sendUnits }}
+                generals={free.filter((g) => army.includes(g.id))}
+              />
+            </>
+          )}
+          {action === 'defense' && (
+            <>
+              <p className="muted">
+                {city.defensePlan ? `현재 수비 전략: ${city.defensePlan.length}라운드 지정됨` : '현재 수비 전략: 자동 (보유 병종 비율대로 무작위 배치)'}
+                . 저장한 전략은 바꿀 때까지 매 전투에 적용된다. 공격측에게 전략을 들키면 전투 리포트에서 다음 공격에 이용당할 수 있다.
+              </p>
+              <PlanEditor plan={defPlan} onChange={setDefPlan} units={city.units ?? emptyUnits()} generals={mine} defense />
+              <div className="row">
+                <button className="secondary" onClick={() => setDefPlan(presetPlan(city.units ?? emptyUnits(), 'even'))}>
+                  초기화
+                </button>
+                <button className="secondary" onClick={() => onAdd({ type: 'setDefense', city: cityId, plan: null })}>
+                  자동으로 되돌리기
+                </button>
               </div>
             </>
           )}
           {action === 'search' && <p className="muted">지력이 높을수록 숨은 인재를 찾기 쉽다.</p>}
-          <button onClick={submit}>명령 추가</button>
+          {action === 'attack' && attackPlan.every((r) => r.count === 0) && (
+            <p className="warn">공격 전략이 비어 있다. 프리셋을 고르거나 라운드별 투입을 입력하라.</p>
+          )}
+          <button onClick={submit} disabled={action === 'attack' && attackPlan.every((r) => r.count === 0)}>{action === 'defense' ? '수비 전략 저장 (명령 추가)' : '명령 추가'}</button>
         </div>
       )}
     </div>

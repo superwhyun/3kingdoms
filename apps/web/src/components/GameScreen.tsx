@@ -5,6 +5,7 @@ import { useApp } from '../store';
 import { MapView } from './MapView';
 import { CityPanel } from './CityPanel';
 import { describe } from './describe';
+import { BattleReports } from './BattleReports';
 import { formatMinutes } from './Lobby';
 
 type Tab = 'city' | 'orders' | 'diplomacy' | 'log' | 'chat';
@@ -186,7 +187,13 @@ export function GameScreen({ gameId }: { gameId: number }) {
               cityId={selected}
               orders={orders}
               canCommand={canCommand && !mySeat?.ready}
-              onAdd={(cmd) => save([...orders, cmd])}
+              onAdd={(cmd) =>
+                save([
+                  // 같은 도시의 수비 전략은 마지막 것만 남긴다
+                  ...orders.filter((o) => !(cmd.type === 'setDefense' && o.type === 'setDefense' && o.city === cmd.city)),
+                  cmd,
+                ])
+              }
             />
           )}
           {tab === 'orders' && (
@@ -222,6 +229,7 @@ export function GameScreen({ gameId }: { gameId: number }) {
           )}
           {tab === 'log' && (
             <div className="panel">
+              <BattleReports view={view} onCity={(id) => { setSelected(id); setTab('city'); }} />
               <h2>지난달 기록</h2>
               {view.log.length === 0 && <p className="muted">기록이 없다.</p>}
               <ul className="log">

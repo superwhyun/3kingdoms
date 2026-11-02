@@ -29,6 +29,8 @@ export const EMPTY_ROUND_RESERVE_RATE = 0.04;
 /** 성벽 피해: 공격 전투력 / 이 값 */
 export const WALL_DAMAGE_DIV = 100;
 export const SIEGE_WALL_MUL = 5;
+/** 한쪽 전투력이 상대의 이 배수를 넘으면 초과분이 상대 예비대로 넘친다 */
+export const OVERWHELM_RATIO = 2;
 
 /** 상성: MATCHUP[내 병종][상대 병종] = 내 전투 질 배율 */
 export const MATCHUP: Record<UnitType, Record<UnitType, number>> = {

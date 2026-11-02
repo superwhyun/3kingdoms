@@ -1,4 +1,9 @@
-import type { Command, GameView } from '@ch/engine';
+import { UNIT_LABEL, UNIT_TYPES, type Command, type GameView, type Units } from '@ch/engine';
+
+export function unitsText(u: Partial<Units>): string {
+  const parts = UNIT_TYPES.filter((t) => (u[t] ?? 0) > 0).map((t) => `${UNIT_LABEL[t]} ${u[t]}`);
+  return parts.length ? parts.join('·') : '병력 없음';
+}
 
 const FIELD: Record<string, string> = { agriculture: '농업 개발', commerce: '상업 개발', defense: '성벽 보수', loyalty: '민심 안정' };
 
@@ -10,7 +15,7 @@ export function describe(cmd: Command, view: GameView): string {
     case 'develop':
       return `${g(cmd.general)}: ${FIELD[cmd.field]}`;
     case 'draft':
-      return `${g(cmd.general)}: 징병 ${cmd.amount}명`;
+      return `${g(cmd.general)}: ${UNIT_LABEL[cmd.unit]} ${cmd.amount}명 징병`;
     case 'train':
       return `${g(cmd.general)}: 훈련`;
     case 'trade':
@@ -26,9 +31,11 @@ export function describe(cmd: Command, view: GameView): string {
     case 'move':
       return `${g(cmd.general)}: ${c(cmd.to)}(으)로 이동`;
     case 'transport':
-      return `${g(cmd.general)}: ${c(cmd.to)}(으)로 수송 (금 ${cmd.gold}, 군량 ${cmd.food}, 병 ${cmd.troops})`;
+      return `${g(cmd.general)}: ${c(cmd.to)}(으)로 수송 (금 ${cmd.gold}, 군량 ${cmd.food}, ${unitsText(cmd.units)})`;
     case 'attack':
-      return `출진 → ${c(cmd.to)}: ${cmd.generals.map(g).join('·')} / 병 ${cmd.troops}, 군량 ${cmd.food}`;
+      return `출진 → ${c(cmd.to)}: ${cmd.generals.map(g).join('·')} / ${unitsText(cmd.units)}, 군량 ${cmd.food}, 전략 ${cmd.plan.filter((r) => r.count > 0).length}라운드`;
+    case 'setDefense':
+      return `${c(cmd.city)} 수비 전략 ${cmd.plan ? `설정 (${cmd.plan.filter((r) => r.count > 0).length}라운드 투입)` : '자동으로 되돌림'}`;
     case 'propose':
       return `${f(cmd.to)}에 ${cmd.kind === 'alliance' ? '동맹' : '정전'} 제안`;
     case 'respond': {
@@ -40,6 +47,7 @@ export function describe(cmd: Command, view: GameView): string {
     case 'tribute':
       return `${c(cmd.from)}에서 ${f(cmd.to)}에 공물 (금 ${cmd.gold})`;
   }
+  return '알 수 없는 명령';
 }
 
 /** 명령에서 행동하는 장수 목록 */
