@@ -79,6 +79,26 @@ const roads: [string, string][] = [
   ['lujiang', 'chaisang'], ['lujiang', 'jianye'], ['chaisang', 'kuaiji'], ['jianye', 'wu'], ['wu', 'kuaiji'],
 ];
 
+/** 강을 끼는 도로: 장강·한수·황하 구간 */
+const rivers: [string, string][] = [
+  ['jiangling', 'jiangxia'], ['jiangxia', 'chaisang'], ['jiangxia', 'lujiang'], ['lujiang', 'chaisang'],
+  ['lujiang', 'jianye'], ['jiangling', 'jiangzhou'], ['xiangyang', 'jiangxia'], ['xiangyang', 'jiangling'],
+  ['henei', 'luoyang'], ['ye', 'puyang'], ['pingyuan', 'puyang'], ['shouchun', 'jianye'],
+];
+
+/** 병종 적성 보정 */
+const aptBonus: Record<string, GeneralDef['apt']> = {
+  sun_jian: { navy: 10 }, sun_ce: { navy: 10 }, cheng_pu: { navy: 15 }, huang_gai: { navy: 20 },
+  han_dang: { navy: 15 }, zhou_yu: { navy: 25 }, lu_su: { navy: 10 }, gan_ning: { navy: 25 },
+  zhou_tai: { navy: 20 }, jiang_qin: { navy: 20 }, chen_wu: { navy: 15 }, ling_cao: { navy: 15 },
+  lu_meng: { navy: 20 }, lu_xun: { navy: 15 }, cai_mao: { navy: 25 }, zhang_yun: { navy: 20 },
+  huang_zu: { navy: 15 }, wen_pin: { navy: 10 },
+  ma_teng: { cavalry: 10 }, ma_chao: { cavalry: 10 }, pang_de: { cavalry: 10 }, ma_dai: { cavalry: 10 },
+  gongsun_zan: { cavalry: 15 }, zhao_yun: { cavalry: 5 }, lu_bu: { cavalry: 5 }, zhang_liao: { cavalry: 10 },
+  huang_zhong: { archer: 15 }, taishi_ci: { archer: 10 }, xiahou_yuan: { cavalry: 10, archer: 5 },
+  zhuge_liang: { siege: 15 }, chen_deng: { siege: 10 }, li_dian: { siege: 5 }, man_chong: { siege: 10 },
+};
+
 const factions: FactionDef[] = [
   { id: 'dongzhuo', name: '동탁', ruler: 'dong_zhuo', color: '#6b4c9a' },
   { id: 'caocao', name: '조조', ruler: 'cao_cao', color: '#3b6fb6' },
@@ -247,6 +267,7 @@ function toCity(r: CityRow): CityDef {
 function toGeneral(r: GenRow): GeneralDef {
   const [id, name, war, int, pol, cha, faction, city, hidden] = r;
   return {
+    ...(aptBonus[id] ? { apt: aptBonus[id] } : {}),
     id, name, war, int, pol, cha, faction, city,
     status: faction ? 'active' : hidden ? 'hidden' : 'free',
     loyalty: faction ? 80 : 0,
@@ -263,6 +284,7 @@ export const scenario190: Scenario = {
   startMonth: 1,
   cities: cityRows.map(toCity),
   roads,
+  rivers,
   factions,
   generals: genRows
     .map(toGeneral)

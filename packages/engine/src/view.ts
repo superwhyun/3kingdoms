@@ -1,4 +1,5 @@
-import type { FactionId, GameState, GeneralStatus, LogEntry, Proposal, Relation } from './types';
+import type { BattleReport, FactionId, GameState, GeneralStatus, LogEntry, Proposal, Relation, RoundPlan, UnitType, Units } from './types';
+import { totalTroops } from './util';
 
 export interface CityView {
   id: string;
@@ -14,7 +15,14 @@ export interface CityView {
   /** 정보 없음이면 null */
   gold: number | null;
   food: number | null;
+  /** 병력 합계 (인접 도시는 근사치) */
   troops: number | null;
+  /** 병종별 병력 (아군만) */
+  units: Units | null;
+  /** 수비 전략 (아군만) */
+  defensePlan: RoundPlan[] | null;
+  /** 강을 끼는 인접 도시 */
+  rivers: string[];
   training: number | null;
   /** 시야 등급: own(아군) / near(인접, 근사치) / far(소유자만) */
   intel: 'own' | 'near' | 'far';
@@ -32,6 +40,7 @@ export interface GeneralView {
   status: GeneralStatus;
   loyalty: number | null;
   captor: FactionId | null;
+  apt: Partial<Record<UnitType, number>> | null;
 }
 
 export interface GameView {
@@ -48,6 +57,8 @@ export interface GameView {
   relations: Record<string, Relation>;
   proposals: Proposal[];
   log: LogEntry[];
+  /** 내가 당사자인 직전 턴 전투 */
+  battles: BattleReport[];
   finished: boolean;
   winner: FactionId | null;
 }
@@ -70,7 +81,10 @@ export function viewFor(state: GameState, me: FactionId | null): GameView {
       defense: c.defense, loyalty: c.loyalty,
       gold: full ? c.gold : null,
       food: full ? c.food : null,
-      troops: full ? c.troops : intel === 'near' ? approx(c.troops) : null,
+      troops: full ? totalTroops(c) : intel === 'near' ? approx(totalTroops(c)) : null,
+      units: full ? { ...c.units } : null,
+      defensePlan: full ? c.defensePlan : null,
+      rivers: state.rivers[c.id] ?? [],
       training: full ? c.training : null,
       intel,
     };
@@ -90,6 +104,7 @@ export function viewFor(state: GameState, me: FactionId | null): GameView {
       status: g.status,
       loyalty: mine ? g.loyalty : null,
       captor: g.captor,
+      apt: g.apt ?? null,
     });
   }
 
@@ -111,6 +126,7 @@ export function viewFor(state: GameState, me: FactionId | null): GameView {
     roads: state.roads,
     relations: state.relations,
     proposals: state.proposals.filter((p) => me !== null && (p.from === me || p.to === me)),
+    battles: (state.battles ?? []).filter((b) => me !== null && (b.attacker === me || b.defender === me)),
     log: state.log.filter((l) => l.visibleTo.length === 0 || (me !== null && l.visibleTo.includes(me))),
     finished: state.finished,
     winner: state.winner,

@@ -1,3 +1,7 @@
+import type { UnitType, Units } from './units';
+
+export type { UnitType, Units } from './units';
+
 export type FactionId = string;
 export type CityId = string;
 export type GeneralId = string;
@@ -16,9 +20,62 @@ export interface CityState {
   loyalty: number;
   gold: number;
   food: number;
-  troops: number;
-  /** 훈련도 0-100 */
+  /** 병종별 병력 */
+  units: Units;
+  /** 훈련도 0-100 (도시 공용) */
   training: number;
+  /** 상시 수비 전략 (null이면 자동) */
+  defensePlan: RoundPlan[] | null;
+}
+
+/** 전투 1라운드 배치 계획 */
+export interface RoundPlan {
+  /** 지휘 장수. null이면 해당 병종 적성이 가장 높은 장수 */
+  general: GeneralId | null;
+  unit: UnitType;
+  count: number;
+}
+
+export interface BattleSide {
+  general: GeneralId | null;
+  unit: UnitType;
+  count: number;
+  loss: number;
+}
+
+export interface BattleRound {
+  round: number;
+  att: BattleSide | null;
+  def: BattleSide | null;
+  /** 수비 빈 라운드에 예비대가 입은 피해 */
+  reserveLoss: number;
+  wallDamage: number;
+  attRemaining: number;
+  defRemaining: number;
+}
+
+export type BattleOutcome = 'captured' | 'withdrawn' | 'starved' | 'annihilated';
+
+export interface BattleReport {
+  turn: number;
+  city: CityId;
+  attacker: FactionId;
+  defender: FactionId | null;
+  river: boolean;
+  attackerGenerals: GeneralId[];
+  defenderGenerals: GeneralId[];
+  attackerStart: Units;
+  defenderStart: Units;
+  attackerEnd: Units;
+  defenderEnd: Units;
+  attackerPlan: RoundPlan[];
+  defenderPlan: RoundPlan[];
+  /** 수비측이 자동 계획을 썼는지 */
+  defenderAuto: boolean;
+  wallStart: number;
+  wallEnd: number;
+  rounds: BattleRound[];
+  outcome: BattleOutcome;
 }
 
 export type GeneralStatus = 'active' | 'free' | 'hidden' | 'captive';
@@ -40,6 +97,8 @@ export interface GeneralState {
   captor: FactionId | null;
   /** captive일 때 포로가 되기 전 소속 */
   formerFaction: FactionId | null;
+  /** 병종 적성 보정 */
+  apt?: Partial<Record<UnitType, number>>;
 }
 
 export interface FactionState {
@@ -85,7 +144,7 @@ export interface LogEntry {
 }
 
 export interface GameState {
-  version: 1;
+  version: 2;
   scenarioId: string;
   year: number;
   month: number;
@@ -97,11 +156,15 @@ export interface GameState {
   generals: Record<GeneralId, GeneralState>;
   factions: Record<FactionId, FactionState>;
   roads: Record<CityId, CityId[]>;
+  /** 강을 끼는 도로 */
+  rivers: Record<CityId, CityId[]>;
   relations: Record<string, Relation>;
   proposals: Proposal[];
   nextProposalId: number;
   /** 직전 턴 해결 시 발생한 로그 */
   log: LogEntry[];
+  /** 직전 턴의 전투 상세 */
+  battles: BattleReport[];
   finished: boolean;
   winner: FactionId | null;
 }
@@ -110,7 +173,7 @@ export type DevelopField = 'agriculture' | 'commerce' | 'defense' | 'loyalty';
 
 export type Command =
   | { type: 'develop'; general: GeneralId; field: DevelopField }
-  | { type: 'draft'; general: GeneralId; amount: number }
+  | { type: 'draft'; general: GeneralId; amount: number; unit: UnitType }
   | { type: 'train'; general: GeneralId }
   | { type: 'trade'; general: GeneralId; action: 'buy' | 'sell'; gold: number }
   | { type: 'search'; general: GeneralId }
@@ -118,8 +181,9 @@ export type Command =
   | { type: 'reward'; target: GeneralId; gold: number }
   | { type: 'release'; target: GeneralId }
   | { type: 'move'; general: GeneralId; to: CityId }
-  | { type: 'transport'; general: GeneralId; to: CityId; gold: number; food: number; troops: number }
-  | { type: 'attack'; generals: GeneralId[]; to: CityId; troops: number; food: number }
+  | { type: 'transport'; general: GeneralId; to: CityId; gold: number; food: number; units: Partial<Units> }
+  | { type: 'attack'; generals: GeneralId[]; to: CityId; units: Partial<Units>; food: number; plan: RoundPlan[] }
+  | { type: 'setDefense'; city: CityId; plan: RoundPlan[] | null }
   | { type: 'propose'; to: FactionId; kind: ProposalKind }
   | { type: 'respond'; proposal: number; accept: boolean }
   | { type: 'break'; to: FactionId }

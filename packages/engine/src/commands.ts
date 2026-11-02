@@ -1,13 +1,13 @@
-import { resolveBattle } from './battle';
+import { checkPlan, normalizePlan, resolveBattle } from './battle';
 import type { Rng } from './rng';
 import type { Command, FactionId, GameState, GeneralState } from './types';
-import { clamp, factionName, getRelation, isAdjacent, isHostile, josa, pushLog } from './util';
+import { BATTLE_ROUNDS, UNIT_LABEL, UNIT_TYPES, draftCost, isUnitType, parseUnits, sumUnits } from './units';
+import { clamp, factionName, getRelation, isAdjacent, isHostile, josa, pushLog, totalTroops } from './util';
 
 export const DEVELOP_COST = 50;
 export const MAX_DEV = 999;
 export const MAX_ATTACK_GENERALS = 5;
 export const MIN_DRAFT = 100;
-export const DRAFT_GOLD_PER_10 = 1;
 
 /** 거래 시세: 상업이 높을수록 유리. buy=금 1당 군량, sell=금 1을 얻는 데 드는 군량 */
 export function tradeRate(commerce: number): { buy: number; sell: number } {
@@ -97,19 +97,21 @@ export function executeCommand(state: GameState, faction: FactionId, cmd: Comman
       const g = actor(state, faction, cmd.general, ctx);
       if (typeof g === 'string') return g;
       if (!isInt(cmd.amount, MIN_DRAFT)) return `징병 수는 ${MIN_DRAFT} 이상의 정수`;
+      if (!isUnitType(cmd.unit)) return '알 수 없는 병종';
       const city = state.cities[g.city];
-      const cost = Math.ceil(cmd.amount / 10) * DRAFT_GOLD_PER_10;
+      if (cmd.unit === 'navy' && !(state.rivers[city.id]?.length > 0)) return `${city.name}: 강을 끼지 않은 도시는 수군을 징병할 수 없다`;
+      const cost = draftCost(cmd.unit, cmd.amount);
       if (city.gold < cost) return `${city.name}: 금이 부족하다 (${cost} 필요)`;
       const limit = Math.floor(city.population / 20);
       if (cmd.amount > limit) return `${city.name}: 징병 가능 인원 초과 (최대 ${limit})`;
       city.gold -= cost;
       city.population -= cmd.amount;
-      const total = city.troops + cmd.amount;
-      city.training = Math.round((city.troops * city.training + cmd.amount * 20) / total);
-      city.troops = total;
+      const cur = totalTroops(city);
+      city.training = Math.round((cur * city.training + cmd.amount * 20) / (cur + cmd.amount));
+      city.units[cmd.unit] += cmd.amount;
       city.loyalty = clamp(city.loyalty - Math.ceil(cmd.amount / 1000), 0, 100);
       ctx.acted.add(g.id);
-      pushLog(state, 'domestic', `${city.name}: ${josa(g.name, '이', '가')} ${cmd.amount}명을 징병했다`, own, city.id);
+      pushLog(state, 'domestic', `${city.name}: ${josa(g.name, '이', '가')} ${UNIT_LABEL[cmd.unit]} ${cmd.amount}명을 징병했다`, own, city.id);
       return null;
     }
 
@@ -117,7 +119,7 @@ export function executeCommand(state: GameState, faction: FactionId, cmd: Comman
       const g = actor(state, faction, cmd.general, ctx);
       if (typeof g === 'string') return g;
       const city = state.cities[g.city];
-      if (city.troops <= 0) return `${city.name}: 훈련할 병사가 없다`;
+      if (totalTroops(city) <= 0) return `${city.name}: 훈련할 병사가 없다`;
       if (city.training >= 100) return `${city.name}: 훈련도가 이미 최대다`;
       const gain = 3 + Math.floor(g.war / 10) + rng.int(0, 3);
       city.training = clamp(city.training + gain, 0, 100);
@@ -260,26 +262,33 @@ export function executeCommand(state: GameState, faction: FactionId, cmd: Comman
       if (!to) return '알 수 없는 도시';
       if (!isAdjacent(state, g.city, to.id)) return `${to.name}: 인접한 도시가 아니다`;
       if (to.owner !== faction) return `${to.name}: 아군 도시가 아니다`;
-      if (!isInt(cmd.gold) || !isInt(cmd.food) || !isInt(cmd.troops)) return '수송량은 0 이상의 정수';
-      if (cmd.gold + cmd.food + cmd.troops === 0) return '수송할 것이 없다';
+      const units = parseUnits(cmd.units ?? {});
+      if (!units) return '병력 형식이 잘못되었다';
+      if (!isInt(cmd.gold) || !isInt(cmd.food)) return '수송량은 0 이상의 정수';
+      const moved = sumUnits(units);
+      if (cmd.gold + cmd.food + moved === 0) return '수송할 것이 없다';
       const from = state.cities[g.city];
-      if (from.gold < cmd.gold || from.food < cmd.food || from.troops < cmd.troops) return `${from.name}: 수송량이 보유량을 초과한다`;
+      if (from.gold < cmd.gold || from.food < cmd.food || UNIT_TYPES.some((t) => from.units[t] < units[t])) {
+        return `${from.name}: 수송량이 보유량을 초과한다`;
+      }
       from.gold -= cmd.gold;
       from.food -= cmd.food;
-      from.troops -= cmd.troops;
       to.gold += cmd.gold;
       to.food += cmd.food;
-      if (cmd.troops > 0) {
-        const total = to.troops + cmd.troops;
-        to.training = Math.round((to.troops * to.training + cmd.troops * from.training) / total);
-        to.troops = total;
+      if (moved > 0) {
+        const cur = totalTroops(to);
+        to.training = Math.round((cur * to.training + moved * from.training) / (cur + moved));
+        for (const t of UNIT_TYPES) {
+          from.units[t] -= units[t];
+          to.units[t] += units[t];
+        }
       }
       g.city = to.id;
       ctx.acted.add(g.id);
       pushLog(
         state,
         'domestic',
-        `${josa(g.name, '이', '가')} ${from.name}→${to.name} 수송 (금 ${cmd.gold}, 군량 ${cmd.food}, 병사 ${cmd.troops})`,
+        `${josa(g.name, '이', '가')} ${from.name}→${to.name} 수송 (금 ${cmd.gold}, 군량 ${cmd.food}, 병사 ${moved})`,
         own,
         to.id,
       );
@@ -305,21 +314,62 @@ export function executeCommand(state: GameState, faction: FactionId, cmd: Comman
       if (!isAdjacent(state, originId, target.id)) return `${target.name}: 인접한 도시가 아니다`;
       if (target.owner === faction) return `${target.name}: 아군 도시다`;
       if (!isHostile(state, faction, target.owner)) return `${target.name}: 동맹·정전 중인 세력이다`;
-      if (!isInt(cmd.troops, 1) || !isInt(cmd.food)) return '병력은 1 이상, 군량은 0 이상의 정수';
-      if (origin.troops < cmd.troops) return `${origin.name}: 병력이 부족하다`;
+      const units = parseUnits(cmd.units);
+      if (!units) return '병력 형식이 잘못되었다';
+      if (sumUnits(units) < 1) return '출진 병력이 없다';
+      if (!isInt(cmd.food)) return '군량은 0 이상의 정수';
+      for (const t of UNIT_TYPES) {
+        if (origin.units[t] < units[t]) return `${origin.name}: ${UNIT_LABEL[t]}이 부족하다`;
+      }
       if (origin.food < cmd.food) return `${origin.name}: 군량이 부족하다`;
-      origin.troops -= cmd.troops;
+      const planErr = checkPlan(cmd.plan);
+      if (planErr) return planErr;
+      if (cmd.plan.length < 1) return '전략을 1라운드 이상 정해야 한다';
+      for (const [i, r] of cmd.plan.entries()) {
+        if (r.general && !cmd.generals.includes(r.general)) return `${i + 1}라운드: 출진하지 않는 장수다`;
+        if (r.count > 0 && units[r.unit] <= 0) return `${i + 1}라운드: ${UNIT_LABEL[r.unit]}을 출진시키지 않았다`;
+      }
+      for (const t of UNIT_TYPES) origin.units[t] -= units[t];
       origin.food -= cmd.food;
       for (const g of gens) ctx.acted.add(g.id);
       if (ctx.dry) return null;
-      // 지휘관: 무력 최상위
+      // 장수 순서: 무력 최상위가 대표
       const sorted = [...gens].sort((a, b) => b.war - a.war);
       resolveBattle(
         state,
-        { faction, origin: originId, generals: sorted, troops: cmd.troops, food: cmd.food, training: origin.training },
+        {
+          faction,
+          origin: originId,
+          generals: sorted,
+          units,
+          food: cmd.food,
+          training: origin.training,
+          plan: normalizePlan(cmd.plan),
+        },
         target.id,
         rng,
       );
+      return null;
+    }
+
+    case 'setDefense': {
+      const city = state.cities[cmd.city];
+      if (!city || city.owner !== faction) return '아군 도시가 아니다';
+      if (cmd.plan === null) {
+        city.defensePlan = null;
+        pushLog(state, 'military', `${city.name}: 수비 전략을 자동으로 되돌렸다`, own, city.id);
+        return null;
+      }
+      const err = checkPlan(cmd.plan, BATTLE_ROUNDS);
+      if (err) return err;
+      for (const [i, r] of cmd.plan.entries()) {
+        if (r.general) {
+          const g = state.generals[r.general];
+          if (!g || g.status !== 'active' || g.faction !== faction) return `${i + 1}라운드: 아군 장수가 아니다`;
+        }
+      }
+      city.defensePlan = normalizePlan(cmd.plan);
+      pushLog(state, 'military', `${city.name}: 수비 전략을 갱신했다 (${cmd.plan.length}라운드)`, own, city.id);
       return null;
     }
 

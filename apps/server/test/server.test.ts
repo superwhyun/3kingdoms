@@ -114,6 +114,46 @@ describe('server', () => {
     expect(mc.body.length).toBe(1);
   });
 
+  it('defense plan + attack: battle report visible only to the two parties', async () => {
+    const { app } = await setup();
+    const [a, b, c] = await Promise.all(
+      ['atk', 'dfn', 'obs'].map((n) => call(app, 'POST', '/api/register', undefined, { name: n, password: 'secret1' })),
+    );
+    const g = await call(app, 'POST', '/api/games', a.body.token, { name: 'war', scenarioId: 'y190', turnMinutes: 60 });
+    const id = g.body.id;
+    await call(app, 'POST', `/api/games/${id}/seat`, a.body.token, { factionId: 'yuanshao' });
+    await call(app, 'POST', `/api/games/${id}/seat`, b.body.token, { factionId: 'liubei' });
+    await call(app, 'POST', `/api/games/${id}/seat`, c.body.token, { factionId: 'sunjian' });
+    await call(app, 'POST', `/api/games/${id}/start`, a.body.token);
+
+    const defPlan = [{ general: 'guan_yu', unit: 'spear', count: 2000 }];
+    expect(
+      (await call(app, 'PUT', `/api/games/${id}/orders`, b.body.token, { turn: 0, commands: [{ type: 'setDefense', city: 'pingyuan', plan: defPlan }] })).status,
+    ).toBe(200);
+    const atk = {
+      type: 'attack',
+      generals: ['yan_liang'],
+      to: 'pingyuan',
+      units: { spear: 2000 },
+      food: 1000,
+      plan: [{ general: null, unit: 'spear', count: 1000 }],
+    };
+    expect((await call(app, 'PUT', `/api/games/${id}/orders`, a.body.token, { turn: 0, commands: [atk] })).status).toBe(200);
+    for (const t of [a, b, c]) await call(app, 'POST', `/api/games/${id}/ready`, t.body.token, { turn: 0, ready: true });
+
+    const va = (await call(app, 'GET', `/api/games/${id}/state`, a.body.token)).body.view;
+    const vb = (await call(app, 'GET', `/api/games/${id}/state`, b.body.token)).body.view;
+    const vc = (await call(app, 'GET', `/api/games/${id}/state`, c.body.token)).body.view;
+    expect(va.turn).toBe(1);
+    expect(va.battles).toHaveLength(1);
+    expect(va.battles[0].defenderPlan[0]).toEqual(defPlan[0]);
+    expect(vb.battles).toHaveLength(1);
+    expect(vc.battles).toHaveLength(0);
+    // 수비 계획은 본인에게만
+    expect(vb.cities.find((x: { id: string }) => x.id === 'pingyuan').defensePlan).toHaveLength(1);
+    expect(va.cities.find((x: { id: string }) => x.id === 'pingyuan').defensePlan).toBeNull();
+  });
+
   it('requires auth for mutations', async () => {
     const { app } = await setup();
     expect((await call(app, 'POST', '/api/games', undefined, { name: 'x', scenarioId: 'y190', turnMinutes: 5 })).status).toBe(401);

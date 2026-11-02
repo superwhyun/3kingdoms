@@ -29,6 +29,8 @@ export const GeneralDefSchema = z.object({
   /** active: 세력 소속, free: 재야(발견됨), hidden: 재야(탐색 필요) */
   status: z.enum(['active', 'free', 'hidden']),
   loyalty: z.number().int().min(0).max(100),
+  /** 병종 적성 보정 (spear/cavalry/archer/navy/siege) */
+  apt: z.partialRecord(z.enum(['spear', 'cavalry', 'archer', 'navy', 'siege']), z.number().int().min(-50).max(50)).optional(),
 });
 
 export const FactionDefSchema = z.object({
@@ -46,6 +48,8 @@ export const ScenarioSchema = z.object({
   startMonth: z.number().int().min(1).max(12),
   cities: z.array(CityDefSchema),
   roads: z.array(z.tuple([z.string(), z.string()])),
+  /** 강을 끼는 도로 (roads의 부분집합) */
+  rivers: z.array(z.tuple([z.string(), z.string()])),
   factions: z.array(FactionDefSchema),
   generals: z.array(GeneralDefSchema),
 });
@@ -80,6 +84,9 @@ export function validateScenario(raw: unknown): Scenario {
     if (!cityIds.has(a) || !cityIds.has(b)) errors.push(`road ${a}-${b}: unknown city`);
     if (a === b) errors.push(`road ${a}-${b}: self loop`);
   }
+  const roadKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  const roadSet = new Set(s.roads.map(([a, b]) => roadKey(a, b)));
+  for (const [a, b] of s.rivers) if (!roadSet.has(roadKey(a, b))) errors.push(`river ${a}-${b}: not a road`);
   for (const g of s.generals) {
     if (!cityIds.has(g.city)) errors.push(`general ${g.id}: unknown city ${g.city}`);
     if (g.faction && !factionIds.has(g.faction)) errors.push(`general ${g.id}: unknown faction ${g.faction}`);

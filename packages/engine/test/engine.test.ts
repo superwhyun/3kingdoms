@@ -7,7 +7,16 @@ import {
   viewFor,
   type Command,
   type GameState,
+  type RoundPlan,
+  type Units,
+  UNIT_TYPES,
+  emptyUnits,
+  totalTroops,
 } from '../src';
+
+const U = (u: Partial<Units>): Units => ({ ...emptyUnits(), ...u });
+const plan = (n: number, unit: RoundPlan['unit'], count: number): RoundPlan[] =>
+  Array.from({ length: n }, () => ({ general: null, unit, count }));
 
 const scenario = getScenario('y190');
 const allFactions = scenario.factions.map((f) => f.id);
@@ -15,7 +24,8 @@ const newGame = (seed = 42) => createGame(scenario, { seed });
 
 function checkInvariants(s: GameState) {
   for (const c of Object.values(s.cities)) {
-    for (const k of ['gold', 'food', 'troops', 'population', 'agriculture', 'commerce', 'defense'] as const) {
+    for (const t of UNIT_TYPES) expect(c.units[t], `${c.id}.${t}`).toBeGreaterThanOrEqual(0);
+    for (const k of ['gold', 'food', 'population', 'agriculture', 'commerce', 'defense'] as const) {
       expect(c[k], `${c.id}.${k}`).toBeGreaterThanOrEqual(0);
       expect(Number.isFinite(c[k])).toBe(true);
     }
@@ -87,24 +97,28 @@ describe('commands', () => {
 
   it('rejects malformed input safely', () => {
     const s = newGame();
-    const v = validateOrders(s, 'caocao', [null as never, { type: 'nope' } as never, { type: 'draft', general: 'xun_yu', amount: -5 }]);
+    const v = validateOrders(s, 'caocao', [null as never, { type: 'nope' } as never, { type: 'draft', general: 'xun_yu', amount: -5, unit: 'spear' }]);
     expect(v.errors.length).toBe(3);
   });
 
   it('draft adds troops and reduces population', () => {
     const s = newGame();
-    const n = resolveTurn(s, { caocao: [{ type: 'draft', general: 'cao_hong', amount: 1000 }] }, { ai: [] });
-    expect(n.cities.chenliu.troops).toBe(s.cities.chenliu.troops + 1000);
+    const n = resolveTurn(s, { caocao: [{ type: 'draft', general: 'cao_hong', amount: 1000, unit: 'cavalry' }] }, { ai: [] });
+    expect(n.cities.chenliu.units.cavalry).toBe(s.cities.chenliu.units.cavalry + 1000);
     expect(n.cities.chenliu.population).toBeLessThan(s.cities.chenliu.population);
   });
 
   it('overwhelming attack captures a neutral city and moves generals', () => {
     const s = newGame();
-    s.cities.chenliu.troops = 30000;
+    s.cities.chenliu.units = U({ spear: 30000 });
     s.cities.chenliu.food = 20000;
     const n = resolveTurn(
       s,
-      { caocao: [{ type: 'attack', generals: ['xiahou_dun', 'cao_ren'], to: 'xuchang', troops: 25000, food: 5000 }] },
+      {
+        caocao: [
+          { type: 'attack', generals: ['xiahou_dun', 'cao_ren'], to: 'xuchang', units: { spear: 25000 }, food: 5000, plan: plan(10, 'spear', 20000) },
+        ],
+      },
       { ai: [] },
     );
     expect(n.cities.xuchang.owner).toBe('caocao');
@@ -117,21 +131,21 @@ describe('commands', () => {
     s.relations['caocao|liubei'] = { status: 'alliance', friendship: 80, truceUntil: null };
     s.roads.chenliu.push('pingyuan');
     s.roads.pingyuan.push('chenliu');
-    const v = validateOrders(s, 'caocao', [{ type: 'attack', generals: ['xiahou_dun'], to: 'pingyuan', troops: 1000, food: 100 }]);
+    const v = validateOrders(s, 'caocao', [{ type: 'attack', generals: ['xiahou_dun'], to: 'pingyuan', units: { spear: 1000 }, food: 100, plan: plan(1, 'spear', 1000) }]);
     expect(v.ok).toBe(false);
   });
 
   it('capturing the last city destroys the faction', () => {
     const s = newGame();
-    s.cities.chenliu.troops = 60000;
+    s.cities.chenliu.units = U({ spear: 60000 });
     s.cities.chenliu.training = 100;
     s.cities.chenliu.food = 50000;
     s.roads.chenliu.push('pingyuan');
     s.roads.pingyuan.push('chenliu');
-    s.cities.pingyuan.troops = 100;
+    s.cities.pingyuan.units = U({ spear: 100 });
     const n = resolveTurn(
       s,
-      { caocao: [{ type: 'attack', generals: ['xiahou_dun', 'cao_ren', 'xiahou_yuan'], to: 'pingyuan', troops: 50000, food: 10000 }] },
+      { caocao: [{ type: 'attack', generals: ['xiahou_dun', 'cao_ren', 'xiahou_yuan'], to: 'pingyuan', units: { spear: 50000 }, food: 10000, plan: plan(10, 'spear', 40000) }] },
       { ai: [] },
     );
     expect(n.cities.pingyuan.owner).toBe('caocao');

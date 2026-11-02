@@ -54,6 +54,7 @@ export function resolveTurn(prev: GameState, orders: Orders, opts: ResolveOption
   if (prev.finished) return prev;
   const state = structuredClone(prev);
   state.log = [];
+  state.battles = [];
   const rng = new Rng(state.rng);
   const ai = new Set(opts.ai);
   const alive = Object.values(state.factions).filter((f) => f.alive).map((f) => f.id).sort();

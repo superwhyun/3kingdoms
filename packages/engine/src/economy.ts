@@ -1,6 +1,7 @@
 import type { Rng } from './rng';
 import type { CityState, GameState } from './types';
-import { clamp, josa, pushLog } from './util';
+import { removeProportional } from './units';
+import { clamp, josa, pushLog, totalTroops } from './util';
 
 export const HARVEST_MONTH = 7;
 export const MAX_POPULATION = 1_500_000;
@@ -17,12 +18,12 @@ export function harvestAmount(c: CityState): number {
 }
 
 export function foodUpkeep(c: CityState): number {
-  return Math.ceil(c.troops / 60);
+  return Math.ceil(totalTroops(c) / 60);
 }
 
 /** 병사 급료 (금) */
 export function goldUpkeep(c: CityState): number {
-  return Math.ceil(c.troops / 250);
+  return Math.ceil(totalTroops(c) / 250);
 }
 
 /** 월간 경제 처리: 세금, 수확, 군량 소비, 인구 변화, 장수 충성도 */
@@ -30,7 +31,7 @@ export function runEconomy(state: GameState, rng: Rng): void {
   for (const c of Object.values(state.cities)) {
     if (!c.owner) {
       // 중립 도시: 수비병이 서서히 회복
-      if (c.troops < 3000) c.troops += 50;
+      if (totalTroops(c) < 3000) c.units.spear += 50;
       continue;
     }
     const own = [c.owner];
@@ -52,8 +53,7 @@ export function runEconomy(state: GameState, rng: Rng): void {
       c.food -= need;
     } else {
       c.food = 0;
-      const lost = Math.floor(c.troops * 0.15);
-      c.troops -= lost;
+      const lost = removeProportional(c.units, Math.floor(totalTroops(c) * 0.15));
       c.loyalty = clamp(c.loyalty - 3, 0, 100);
       pushLog(state, 'economy', `${c.name}: 군량 부족으로 병사 ${lost}명이 탈영했다`, own, c.id);
     }

@@ -1,9 +1,10 @@
-import { estimateOdds } from './battle';
+import { autoPlan, estimateOdds } from './battle';
 import { DEVELOP_COST, MAX_ATTACK_GENERALS, MAX_DEV, tradeRate } from './commands';
 import { harvestAmount } from './economy';
 import type { Rng } from './rng';
-import type { CityState, Command, FactionId, GameState, GeneralState, Proposal } from './types';
-import { citiesOf, factionPower, generalsIn, getRelation, isHostile } from './util';
+import type { CityState, Command, FactionId, GameState, GeneralState, Proposal, RoundPlan } from './types';
+import { UNIT_TYPES, draftCost, emptyUnits, sumUnits, type UnitType, type Units } from './units';
+import { citiesOf, factionPower, generalsIn, getRelation, isHostile, totalTroops } from './util';
 
 /** AI가 공격을 시작하는 최소 턴 (초반 유예) */
 export const AI_GRACE_TURNS = 3;
@@ -12,6 +13,40 @@ function hostileNeighbors(state: GameState, faction: FactionId, city: CityState)
   return state.roads[city.id]
     .map((id) => state.cities[id])
     .filter((c) => c.owner !== faction && isHostile(state, faction, c.owner));
+}
+
+/** AI 공격 계획: 균등 / 정찰 후 주력 / 초반 총공 중 하나를 무작위로 */
+export function makeAttackPlan(units: Units, rng: Rng): RoundPlan[] {
+  const base = autoPlan(units, rng);
+  const style = rng.int(0, 2);
+  const total = sumUnits(units);
+  return base.map((r, i) => {
+    let frac: number;
+    if (style === 0) frac = 0.6;
+    else if (style === 1) frac = i < 2 ? 0 : 0.75;
+    else frac = i < 4 ? 0.9 : 0.4;
+    if (style === 1 && i < 2) return { ...r, count: Math.max(1, Math.round(total * 0.04)) };
+    return { ...r, count: Math.max(1, Math.round(units[r.unit] * frac)) };
+  });
+}
+
+function scaleUnits(u: Units, frac: number): Units {
+  const out = emptyUnits();
+  for (const t of UNIT_TYPES) out[t] = Math.floor(u[t] * frac);
+  return out;
+}
+
+/** 징병 병종 선택 */
+function pickDraftUnit(state: GameState, city: CityState, enemies: CityState[], rng: Rng): UnitType {
+  const river = (state.rivers[city.id]?.length ?? 0) > 0;
+  const strongWalls = enemies.some((e) => e.defense > 500);
+  const roll = rng.next();
+  if (river && roll < 0.2) return 'navy';
+  if (strongWalls && roll > 0.93) return 'siege';
+  const r = rng.next();
+  if (r < 0.4) return 'spear';
+  if (r < 0.7) return 'archer';
+  return 'cavalry';
 }
 
 /** 규칙 기반 AI 명령 생성 */
@@ -26,7 +61,7 @@ export function planAI(state: GameState, faction: FactionId, rng: Rng): Command[
     const avail: GeneralState[] = generalsIn(state, city.id, faction).sort((a, b) => b.war - a.war);
     if (avail.length === 0) continue;
     let budget = city.gold;
-    let troops = city.troops;
+    let troops = totalTroops(city);
     let food = city.food;
     const take = (pick: (g: GeneralState) => number): GeneralState | undefined => {
       if (!avail.length) return undefined;
@@ -50,7 +85,15 @@ export function planAI(state: GameState, faction: FactionId, rng: Rng): Command[
         const needFood = Math.ceil(armyTroops / 200) * 12 + 100;
         const armyFood = Math.min(Math.floor(food * 0.7), needFood);
         if (armyFood >= Math.ceil(armyTroops / 200) * 6) {
-          cmds.push({ type: 'attack', generals: army.map((g) => g.id), to: best.target.id, troops: armyTroops, food: armyFood });
+          const units = scaleUnits(city.units, 0.8);
+          cmds.push({
+            type: 'attack',
+            generals: army.map((g) => g.id),
+            to: best.target.id,
+            units,
+            food: armyFood,
+            plan: makeAttackPlan(units, rng),
+          });
           for (const g of army) avail.splice(avail.indexOf(g), 1);
           troops -= armyTroops;
           food -= armyFood;
@@ -109,15 +152,16 @@ export function planAI(state: GameState, faction: FactionId, rng: Rng): Command[
     const cap = Math.floor(city.population / (isFrontier ? 12 : 25));
     const yearlyFood = food + (state.month <= 7 ? harvestAmount(city) : 0);
     const foodCap = Math.floor((yearlyFood / 12) * 60);
+    const draftUnit = pickDraftUnit(state, city, enemies, rng);
     if (troops < cap && troops < foodCap && budget > 200 && city.loyalty >= 45) {
-      const affordable = Math.floor(((budget - 100) * 10) / 2);
+      const affordable = Math.floor((budget - 100) / 2 / (draftCost(draftUnit, 1000) / 1000));
       let amount = Math.min(affordable, cap - troops, foodCap - troops, Math.floor(city.population / 20), 3000);
       amount = Math.floor(amount / 100) * 100;
       if (amount >= 100) {
         const g = take((x) => x.cha);
         if (g) {
-          cmds.push({ type: 'draft', general: g.id, amount });
-          budget -= Math.ceil(amount / 10);
+          cmds.push({ type: 'draft', general: g.id, amount, unit: draftUnit });
+          budget -= draftCost(draftUnit, amount);
           troops += amount;
         }
       }
@@ -135,9 +179,9 @@ export function planAI(state: GameState, faction: FactionId, rng: Rng): Command[
       if (dest) {
         const g = take((x) => -(x.war + x.int));
         if (g) {
-          const amt = Math.floor(troops * 0.6);
-          cmds.push({ type: 'transport', general: g.id, to: dest.id, gold: 0, food: Math.floor(food * 0.4), troops: amt });
-          troops -= amt;
+          const units = scaleUnits(city.units, 0.6);
+          cmds.push({ type: 'transport', general: g.id, to: dest.id, gold: 0, food: Math.floor(food * 0.4), units });
+          troops -= sumUnits(units);
         }
       }
     }

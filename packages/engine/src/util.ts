@@ -1,4 +1,13 @@
 import type { CityState, FactionId, GameState, GeneralState, LogEntry, LogKind, Relation } from './types';
+import { sumUnits } from './units';
+
+export function totalTroops(c: Pick<CityState, 'units'>): number {
+  return sumUnits(c.units);
+}
+
+export function isRiver(state: GameState, a: string, b: string): boolean {
+  return state.rivers[a]?.includes(b) ?? false;
+}
 
 export const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
@@ -44,7 +53,7 @@ export function isAdjacent(state: GameState, a: string, b: string): boolean {
 
 export function factionPower(state: GameState, faction: FactionId): number {
   let p = 0;
-  for (const c of citiesOf(state, faction)) p += c.troops + c.population / 50 + c.gold * 2;
+  for (const c of citiesOf(state, faction)) p += totalTroops(c) + c.population / 50 + c.gold * 2;
   return p;
 }
 

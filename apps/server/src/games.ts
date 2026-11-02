@@ -15,6 +15,15 @@ import type { User } from './auth';
 
 export type GameStatus = 'lobby' | 'running' | 'finished';
 
+/** 현재 엔진이 다루는 상태 버전 */
+export const STATE_VERSION = 2;
+
+function loadState(r: { state_json: string }): GameState {
+  const s = JSON.parse(r.state_json) as GameState;
+  if (s.version !== STATE_VERSION) throw new GameError('이전 버전에서 만든 게임이라 열 수 없다', 410);
+  return s;
+}
+
 export class GameError extends Error {
   constructor(
     message: string,
@@ -82,7 +91,15 @@ export class GameService {
   constructor(
     private db: DB,
     private now: () => number = Date.now,
-  ) {}
+  ) {
+    // 구버전 상태의 게임은 종료 처리해 스케줄러가 건드리지 않게 한다
+    const rows = this.db.prepare("SELECT id, state_json FROM games WHERE status != 'finished'").all() as { id: number; state_json: string }[];
+    for (const r of rows) {
+      if ((JSON.parse(r.state_json) as { version?: number }).version !== STATE_VERSION) {
+        this.db.prepare("UPDATE games SET status = 'finished', deadline = NULL WHERE id = ?").run(r.id);
+      }
+    }
+  }
 
   private emit(e: GameEvent) {
     this.events.emit('event', e);
@@ -161,7 +178,7 @@ export class GameService {
   takeSeat(user: User, gameId: number, factionId: string): GameSummary {
     const g = this.row(gameId);
     if (g.status === 'finished') throw new GameError('끝난 게임이다');
-    const state = JSON.parse(g.state_json) as GameState;
+    const state = loadState(g);
     const f = state.factions[factionId];
     if (!f) throw new GameError('알 수 없는 세력');
     if (!f.alive) throw new GameError('멸망한 세력이다');
@@ -203,7 +220,7 @@ export class GameService {
   /** 플레이어 시점 상태 + 내가 제출한 명령 */
   view(user: User | null, gameId: number) {
     const g = this.row(gameId);
-    const state = JSON.parse(g.state_json) as GameState;
+    const state = loadState(g);
     const me = user ? this.seatOf(gameId, user.id) : null;
     const orders = me
       ? ((this.db
@@ -222,7 +239,7 @@ export class GameService {
     if (g.status !== 'running') throw new GameError('진행 중인 게임이 아니다');
     const me = this.seatOf(gameId, user.id);
     if (!me) throw new GameError('세력을 선택하지 않았다', 403);
-    const state = JSON.parse(g.state_json) as GameState;
+    const state = loadState(g);
     if (turn !== state.turn) throw new GameError('이미 지나간 턴이다', 409);
     if (!state.factions[me]?.alive) throw new GameError('멸망한 세력이다');
     const v = validateOrders(state, me, commands);
@@ -240,7 +257,7 @@ export class GameService {
     if (g.status !== 'running') throw new GameError('진행 중인 게임이 아니다');
     const me = this.seatOf(gameId, user.id);
     if (!me) throw new GameError('세력을 선택하지 않았다', 403);
-    const state = JSON.parse(g.state_json) as GameState;
+    const state = loadState(g);
     if (turn !== state.turn) throw new GameError('이미 지나간 턴이다', 409);
     this.db.prepare('UPDATE seats SET ready = ? WHERE game_id = ? AND faction_id = ?').run(ready ? 1 : 0, gameId, me);
     this.emit({ type: 'game', gameId });
@@ -252,7 +269,7 @@ export class GameService {
   private maybeResolve(gameId: number): boolean {
     const g = this.row(gameId);
     if (g.status !== 'running') return false;
-    const state = JSON.parse(g.state_json) as GameState;
+    const state = loadState(g);
     const humans = this.seats(gameId).filter((s) => state.factions[s.faction_id]?.alive);
     if (humans.length > 0 && humans.every((s) => s.ready)) {
       this.resolve(gameId, false);
@@ -269,7 +286,7 @@ export class GameService {
     tx(this.db, () => {
       const g = this.row(gameId);
       if (g.status !== 'running') return;
-      const state = JSON.parse(g.state_json) as GameState;
+      const state = loadState(g);
       const seats = this.seats(gameId);
       const rows = this.db
         .prepare('SELECT faction_id, commands_json FROM orders WHERE game_id = ? AND turn = ?')
@@ -306,7 +323,7 @@ export class GameService {
 
   postMessage(user: User, gameId: number, text: string, toFaction: string | null): ChatMessage {
     const g = this.row(gameId);
-    const state = JSON.parse(g.state_json) as GameState;
+    const state = loadState(g);
     const me = this.seatOf(gameId, user.id);
     if (toFaction !== null) {
       if (!state.factions[toFaction]) throw new GameError('알 수 없는 세력');
