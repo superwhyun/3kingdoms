@@ -149,6 +149,15 @@ describe('battle resolution', () => {
 describe('excess damage after the committed group is wiped', () => {
   const rounds = (unit: RoundPlan['unit'], n: number) => P(...Array.from({ length: 10 }, () => [unit, n] as [RoundPlan['unit'], number]));
 
+  it('excess is linear in the attackers left over after the wipe', () => {
+    // K=0.25, 동일 질: 100명 전멸에 1,600명 필요 → 남는 3,200 × 0.25 = 800
+    expect(clashLosses(4800, 1, 100, 1).bExcess).toBe(800);
+    expect(clashLosses(1600, 1, 100, 1).bExcess).toBe(0);
+    expect(clashLosses(1000, 1, 100, 1).bExcess).toBe(0);
+    // 질 우위가 있으면 더 적은 병력으로 전멸시키고 더 많이 밀고 들어간다
+    expect(clashLosses(4800, 2, 100, 1).bExcess).toBeGreaterThan(800);
+  });
+
   it('clashLosses reports the defender excess only', () => {
     const r = clashLosses(15000, 1, 300, 1);
     expect(r.bLoss).toBe(300);
@@ -158,12 +167,22 @@ describe('excess damage after the committed group is wiped', () => {
     expect(probe.bExcess).toBe(0);
   });
 
-  it('goes to the wall first; reserve untouched while walls stand', () => {
-    const s = attack(arena({ spear: 8000 }, rounds('spear', 300), 900), { spear: 20000 }, rounds('spear', 15000));
-    const r0 = s.battles[0].rounds[0];
-    expect(r0.def!.loss).toBe(300);
-    expect(r0.wallDamage).toBeGreaterThan(0);
-    expect(r0.reserveLoss).toBe(0);
+  it('goes to the wall first; reserve hit only after the wall is gone', () => {
+    // 남은 피해가 성벽보다 작은 경우: 성벽만 깎인다
+    const small = attack(arena({ spear: 8000 }, rounds('spear', 300), 900), { spear: 20000 }, rounds('spear', 6000));
+    const s0 = small.battles[0].rounds[0];
+    expect(s0.def!.loss).toBe(300);
+    expect(s0.wallDamage).toBeGreaterThan(0);
+    expect(s0.reserveLoss).toBe(0);
+    // 남은 피해가 큰 경우: 예비대가 피해를 입는 라운드에는 성벽이 이미 0이다
+    const big = attack(arena({ spear: 8000 }, rounds('spear', 300), 900), { spear: 20000 }, rounds('spear', 15000));
+    const b = big.battles[0];
+    let wall = b.wallStart;
+    for (const r of b.rounds) {
+      wall -= r.wallDamage;
+      if (r.def && r.reserveLoss > 0) expect(wall).toBe(0);
+    }
+    expect(b.rounds[0].reserveLoss).toBeGreaterThan(0);
   });
 
   it('spills onto the reserve once walls are down', () => {

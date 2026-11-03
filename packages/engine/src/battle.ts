@@ -156,6 +156,9 @@ export function unitQuality(opts: {
 /**
  * 교전 손실. 손실 = K × √(내 투입 × 상대 투입) × √(상대 질 / 내 질), 투입량을 넘지 않음.
  * 질이 같으면 양측 손실이 같고, 많이 투입할수록 주고받는 피해가 함께 커진다.
+ *
+ * B측 투입분이 전멸하는 경우, 전멸에 필요한 A측 병력(need)을 뺀 나머지(spare)가
+ * 선형으로 밀고 들어간다: bExcess = spare × K × √(aQ / bQ) × noise. (A측 초과분은 소멸)
  */
 export function clashLosses(
   aCount: number,
@@ -170,9 +173,18 @@ export function clashLosses(
   return {
     aLoss: Math.min(aCount, Math.round(base * Math.sqrt(bQ / aQ) * noiseA)),
     bLoss: Math.min(bCount, rawB),
-    // B측 투입분이 전멸하고 남은 피해 (A측 초과분은 소멸)
-    bExcess: Math.max(0, rawB - bCount),
+    bExcess: excessAfterWipe(aCount, aQ, bCount, bQ, noiseB),
   };
+}
+
+/** B측 투입분 전멸 후 남는 A측 병력이 가하는 피해 (병력 단위) */
+export function excessAfterWipe(aCount: number, aQ: number, bCount: number, bQ: number, noise = 1): number {
+  if (aCount <= 0 || bCount <= 0) return 0;
+  const rate = BATTLE_K * Math.sqrt(aQ / bQ) * noise;
+  // 원시 피해 K×√(a×b)×√(aQ/bQ)×noise = b 가 되는 a
+  const need = bCount / (rate * rate);
+  const spare = aCount - need;
+  return spare > 0 ? Math.round(spare * rate) : 0;
 }
 
 /**
