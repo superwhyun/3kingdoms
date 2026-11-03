@@ -30,7 +30,7 @@ export const EMPTY_ROUND_RESERVE_RATE = 0.04;
 export const WALL_DAMAGE_DIV = 100;
 export const SIEGE_WALL_MUL = 5;
 /** 수비 투입분이 전멸하고 남은 피해 1명당 성벽 피해 (성벽이 0이면 예비대가 받는다) */
-export const WALL_PER_EXCESS_TROOP = 0.2;
+export const WALL_PER_EXCESS_TROOP = 1;
 
 /** 상성: MATCHUP[내 병종][상대 병종] = 내 전투 질 배율 */
 export const MATCHUP: Record<UnitType, Record<UnitType, number>> = {

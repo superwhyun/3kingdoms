@@ -175,6 +175,16 @@ export function clashLosses(
   };
 }
 
+/**
+ * 남은 피해(병력 단위)를 성벽 피해로 환산하고, 성벽이 감당하지 못한 나머지를 예비대 피해(병력)로 돌려준다.
+ */
+export function excessToWall(excess: number, wallLeft: number, siegeMul = 1): { wall: number; reserveTroops: number } {
+  const perTroop = WALL_PER_EXCESS_TROOP * siegeMul;
+  const asWall = excess * perTroop;
+  const wall = Math.min(wallLeft, asWall);
+  return { wall, reserveTroops: Math.round((asWall - wall) / perTroop) };
+}
+
 // ── 전투 ───────────────────────────────────────────────────
 
 /** 공격 실행. 출진 도시에서 병력·군량은 이미 차감된 상태로 호출된다. */
@@ -286,12 +296,9 @@ export function resolveBattle(state: GameState, army: Army, targetId: string, rn
         if (ap!.unit === 'siege') wallDamage = (aPower / WALL_DAMAGE_DIV) * SIEGE_WALL_MUL * 0.5;
         if (bExcess > 0) {
           // 수비 투입분 전멸 후 남은 피해 → 성벽, 성벽이 바닥나면 예비대
-          const wallLeft = Math.max(0, target.defense - wallDamage);
-          const excessWall = bExcess * WALL_PER_EXCESS_TROOP * siegeMul;
-          const toWall = Math.min(wallLeft, excessWall);
-          wallDamage += toWall;
-          const overflowTroops = Math.round((excessWall - toWall) / (WALL_PER_EXCESS_TROOP * siegeMul));
-          if (overflowTroops > 0) round.reserveLoss = removeProportional(def, overflowTroops);
+          const spill = excessToWall(bExcess, Math.max(0, target.defense - wallDamage), siegeMul);
+          wallDamage += spill.wall;
+          if (spill.reserveTroops > 0) round.reserveLoss = removeProportional(def, spill.reserveTroops);
         }
       } else {
         // 수비가 비운 라운드: 예비대와 성벽 타격

@@ -3,6 +3,9 @@ import { getScenario } from '@ch/data';
 import {
   autoPlan,
   clashLosses,
+  excessToWall,
+  WALL_PER_EXCESS_TROOP,
+  SIEGE_WALL_MUL,
   createGame,
   emptyUnits,
   resolveTurn,
@@ -170,13 +173,13 @@ describe('excess damage after the committed group is wiped', () => {
     expect(r0.reserveLoss).toBeGreaterThan(0);
   });
 
-  it('siege multiplies excess wall damage by 5', () => {
-    const a = attack(arena({ spear: 8000 }, rounds('spear', 300), 990), { spear: 20000 }, rounds('spear', 15000));
-    const b = attack(arena({ spear: 8000 }, rounds('spear', 300), 990), { siege: 5000 }, rounds('siege', 5000));
-    const excessA = clashLosses(15000, 1, 300, 1).bExcess;
-    expect(excessA).toBeGreaterThan(0);
-    // 공성은 교전 질이 낮아도 남은 피해 × 5배 + 기본 공성 피해로 성벽을 더 깎는다
-    expect(b.battles[0].rounds[0].wallDamage).toBeGreaterThan(a.battles[0].rounds[0].wallDamage);
+  it('excessToWall: walls absorb first, siege multiplies by 5, overflow goes to reserve', () => {
+    expect(excessToWall(100, 500)).toEqual({ wall: 100 * WALL_PER_EXCESS_TROOP, reserveTroops: 0 });
+    expect(excessToWall(100, 1000, SIEGE_WALL_MUL)).toEqual({ wall: 100 * WALL_PER_EXCESS_TROOP * SIEGE_WALL_MUL, reserveTroops: 0 });
+    const partial = excessToWall(100, 40 * WALL_PER_EXCESS_TROOP);
+    expect(partial.wall).toBe(40 * WALL_PER_EXCESS_TROOP);
+    expect(partial.reserveTroops).toBe(60);
+    expect(excessToWall(100, 0)).toEqual({ wall: 0, reserveTroops: 100 });
   });
 
   it('an attacking probe that is wiped out costs nothing beyond the probe', () => {
