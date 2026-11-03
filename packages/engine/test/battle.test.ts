@@ -143,13 +143,46 @@ describe('battle resolution', () => {
   });
 });
 
-describe('overwhelm spill', () => {
-  it('trickling a thin defense lets a massive commitment hit the reserve', () => {
-    const thin = P(...Array.from({ length: 10 }, () => ['spear', 300] as [RoundPlan['unit'], number]));
-    const s = attack(arena({ spear: 8000 }, thin), { spear: 20000 }, P(...Array.from({ length: 10 }, () => ['spear', 15000] as [RoundPlan['unit'], number])));
-    const r = s.battles[0];
-    expect(r.rounds[0].reserveLoss).toBeGreaterThan(0);
-    expect(r.rounds[0].attReserveLoss).toBe(0);
-    expect(r.outcome).toBe('captured');
+describe('excess damage after the committed group is wiped', () => {
+  const rounds = (unit: RoundPlan['unit'], n: number) => P(...Array.from({ length: 10 }, () => [unit, n] as [RoundPlan['unit'], number]));
+
+  it('clashLosses reports the defender excess only', () => {
+    const r = clashLosses(15000, 1, 300, 1);
+    expect(r.bLoss).toBe(300);
+    expect(r.bExcess).toBeGreaterThan(0);
+    const probe = clashLosses(300, 1, 15000, 1);
+    expect(probe.aLoss).toBe(300);
+    expect(probe.bExcess).toBe(0);
+  });
+
+  it('goes to the wall first; reserve untouched while walls stand', () => {
+    const s = attack(arena({ spear: 8000 }, rounds('spear', 300), 900), { spear: 20000 }, rounds('spear', 15000));
+    const r0 = s.battles[0].rounds[0];
+    expect(r0.def!.loss).toBe(300);
+    expect(r0.wallDamage).toBeGreaterThan(0);
+    expect(r0.reserveLoss).toBe(0);
+  });
+
+  it('spills onto the reserve once walls are down', () => {
+    const s = attack(arena({ spear: 8000 }, rounds('spear', 300), 0), { spear: 20000 }, rounds('spear', 15000));
+    const r0 = s.battles[0].rounds[0];
+    expect(r0.wallDamage).toBe(0);
+    expect(r0.reserveLoss).toBeGreaterThan(0);
+  });
+
+  it('siege multiplies excess wall damage by 5', () => {
+    const a = attack(arena({ spear: 8000 }, rounds('spear', 300), 990), { spear: 20000 }, rounds('spear', 15000));
+    const b = attack(arena({ spear: 8000 }, rounds('spear', 300), 990), { siege: 5000 }, rounds('siege', 5000));
+    const excessA = clashLosses(15000, 1, 300, 1).bExcess;
+    expect(excessA).toBeGreaterThan(0);
+    // 공성은 교전 질이 낮아도 남은 피해 × 5배 + 기본 공성 피해로 성벽을 더 깎는다
+    expect(b.battles[0].rounds[0].wallDamage).toBeGreaterThan(a.battles[0].rounds[0].wallDamage);
+  });
+
+  it('an attacking probe that is wiped out costs nothing beyond the probe', () => {
+    const s = attack(arena({ spear: 20000 }, rounds('spear', 15000), 0), { spear: 5000 }, P(['spear', 300]));
+    const r0 = s.battles[0].rounds[0];
+    expect(r0.att!.loss).toBe(300);
+    expect(r0.attRemaining).toBe(4700);
   });
 });

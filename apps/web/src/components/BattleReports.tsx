@@ -75,12 +75,6 @@ export function BattleReports({ view, onCity }: { view: GameView; onCity: (id: s
                               수비 예비대 −{r.reserveLoss.toLocaleString()}
                             </>
                           )}
-                          {r.attReserveLoss > 0 && (
-                            <>
-                              <br />
-                              공격 예비대 −{r.attReserveLoss.toLocaleString()}
-                            </>
-                          )}
                           <div className="muted">
                             {r.attRemaining.toLocaleString()} : {r.defRemaining.toLocaleString()}
                           </div>

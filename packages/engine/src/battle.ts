@@ -15,11 +15,11 @@ import {
   BATTLE_ROUNDS,
   EMPTY_ROUND_RESERVE_RATE,
   MATCHUP,
-  OVERWHELM_RATIO,
   SIEGE_WALL_MUL,
   UNIT_LABEL,
   UNIT_TYPES,
   WALL_DAMAGE_DIV,
+  WALL_PER_EXCESS_TROOP,
   aptitude,
   isUnitType,
   removeProportional,
@@ -164,11 +164,14 @@ export function clashLosses(
   bQ: number,
   noiseA = 1,
   noiseB = 1,
-): { aLoss: number; bLoss: number } {
+): { aLoss: number; bLoss: number; bExcess: number } {
   const base = BATTLE_K * Math.sqrt(aCount * bCount);
+  const rawB = Math.round(base * Math.sqrt(aQ / bQ) * noiseB);
   return {
     aLoss: Math.min(aCount, Math.round(base * Math.sqrt(bQ / aQ) * noiseA)),
-    bLoss: Math.min(bCount, Math.round(base * Math.sqrt(aQ / bQ) * noiseB)),
+    bLoss: Math.min(bCount, rawB),
+    // B측 투입분이 전멸하고 남은 피해 (A측 초과분은 소멸)
+    bExcess: Math.max(0, rawB - bCount),
   };
 }
 
@@ -250,7 +253,6 @@ export function resolveBattle(state: GameState, army: Army, targetId: string, rn
       att: aCount > 0 ? { general: aGen?.id ?? null, unit: ap!.unit, count: aCount, loss: 0 } : null,
       def: dCount > 0 ? { general: dGen?.id ?? null, unit: dp!.unit, count: dCount, loss: 0 } : null,
       reserveLoss: 0,
-      attReserveLoss: 0,
       wallDamage: 0,
       attRemaining: 0,
       defRemaining: 0,
@@ -275,19 +277,22 @@ export function resolveBattle(state: GameState, army: Army, targetId: string, rn
           river,
           wall: target.defense,
         });
-        const { aLoss, bLoss } = clashLosses(aCount, aQ, dCount, dQ, rng.range(0.9, 1.1), rng.range(0.9, 1.1));
+        const { aLoss, bLoss, bExcess } = clashLosses(aCount, aQ, dCount, dQ, rng.range(0.9, 1.1), rng.range(0.9, 1.1));
         att[ap!.unit] -= aLoss;
         def[dp!.unit] -= bLoss;
         (round.att as BattleSide).loss = aLoss;
         (round.def as BattleSide).loss = bLoss;
-        // 압도: 초과 전투력이 상대 예비대로 넘친다
-        const dPower = dCount * dQ;
-        if (aPower > dPower * OVERWHELM_RATIO) {
-          round.reserveLoss = removeProportional(def, Math.round((aPower - dPower * OVERWHELM_RATIO) * EMPTY_ROUND_RESERVE_RATE * rng.range(0.9, 1.1)));
-        } else if (dPower > aPower * OVERWHELM_RATIO) {
-          round.attReserveLoss = removeProportional(att, Math.round((dPower - aPower * OVERWHELM_RATIO) * EMPTY_ROUND_RESERVE_RATE * rng.range(0.9, 1.1)));
-        }
+        const siegeMul = ap!.unit === 'siege' ? SIEGE_WALL_MUL : 1;
         if (ap!.unit === 'siege') wallDamage = (aPower / WALL_DAMAGE_DIV) * SIEGE_WALL_MUL * 0.5;
+        if (bExcess > 0) {
+          // 수비 투입분 전멸 후 남은 피해 → 성벽, 성벽이 바닥나면 예비대
+          const wallLeft = Math.max(0, target.defense - wallDamage);
+          const excessWall = bExcess * WALL_PER_EXCESS_TROOP * siegeMul;
+          const toWall = Math.min(wallLeft, excessWall);
+          wallDamage += toWall;
+          const overflowTroops = Math.round((excessWall - toWall) / (WALL_PER_EXCESS_TROOP * siegeMul));
+          if (overflowTroops > 0) round.reserveLoss = removeProportional(def, overflowTroops);
+        }
       } else {
         // 수비가 비운 라운드: 예비대와 성벽 타격
         round.reserveLoss = removeProportional(def, Math.round(aPower * EMPTY_ROUND_RESERVE_RATE * rng.range(0.9, 1.1)));
