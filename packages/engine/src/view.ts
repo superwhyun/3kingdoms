@@ -1,4 +1,4 @@
-import type { BattleReport, FactionId, GameState, GeneralStatus, LogEntry, Proposal, Relation, RoundPlan, UnitType, Units } from './types';
+import type { BattleReport, FacilityType, FactionId, GameState, GeneralStatus, LogEntry, Proposal, Relation, RoundPlan, Rules, TaxLevel, UnitType, Units } from './types';
 import { totalTroops } from './util';
 
 export interface CityView {
@@ -23,6 +23,12 @@ export interface CityView {
   defensePlan: RoundPlan[] | null;
   /** 강을 끼는 인접 도시 */
   rivers: string[];
+  /** 아군만 */
+  tax: TaxLevel | null;
+  governor: string | null;
+  construction: { facility: FacilityType; monthsLeft: number } | null;
+  /** 아군·인접 도시만 */
+  facilities: Record<FacilityType, number> | null;
   training: number | null;
   /** 시야 등급: own(아군) / near(인접, 근사치) / far(소유자만) */
   intel: 'own' | 'near' | 'far';
@@ -56,6 +62,8 @@ export interface GameView {
   roads: Record<string, string[]>;
   relations: Record<string, Relation>;
   proposals: Proposal[];
+  /** 이 게임의 규칙 조정값 */
+  rules: Rules;
   log: LogEntry[];
   /** 내가 당사자인 직전 턴 전투 */
   battles: BattleReport[];
@@ -85,6 +93,10 @@ export function viewFor(state: GameState, me: FactionId | null): GameView {
       units: full ? { ...c.units } : null,
       defensePlan: full ? c.defensePlan : null,
       rivers: state.rivers[c.id] ?? [],
+      tax: full ? c.tax : null,
+      governor: full ? c.governor : null,
+      construction: full ? c.construction : null,
+      facilities: intel === 'far' ? null : { ...c.facilities },
       training: full ? c.training : null,
       intel,
     };
@@ -126,6 +138,7 @@ export function viewFor(state: GameState, me: FactionId | null): GameView {
     roads: state.roads,
     relations: state.relations,
     proposals: state.proposals.filter((p) => me !== null && (p.from === me || p.to === me)),
+    rules: state.rules,
     battles: (state.battles ?? []).filter((b) => me !== null && (b.attacker === me || b.defender === me)),
     log: state.log.filter((l) => l.visibleTo.length === 0 || (me !== null && l.visibleTo.includes(me))),
     finished: state.finished,

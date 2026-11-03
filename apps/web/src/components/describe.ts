@@ -1,4 +1,4 @@
-import { UNIT_LABEL, UNIT_TYPES, type Command, type GameView, type Units } from '@ch/engine';
+import { FACILITY_LABEL, SCHEME_LABEL, TAX_LABEL, UNIT_LABEL, UNIT_TYPES, type Command, type GameView, type Units } from '@ch/engine';
 
 export function unitsText(u: Partial<Units>): string {
   const parts = UNIT_TYPES.filter((t) => (u[t] ?? 0) > 0).map((t) => `${UNIT_LABEL[t]} ${u[t]}`);
@@ -36,6 +36,14 @@ export function describe(cmd: Command, view: GameView): string {
       return `출진 → ${c(cmd.to)}: ${cmd.generals.map(g).join('·')} / ${unitsText(cmd.units)}, 군량 ${cmd.food}, 전략 ${cmd.plan.filter((r) => r.count > 0).length}라운드`;
     case 'setDefense':
       return `${c(cmd.city)} 수비 전략 ${cmd.plan ? `설정 (${cmd.plan.filter((r) => r.count > 0).length}라운드 투입)` : '자동으로 되돌림'}`;
+    case 'setTax':
+      return `${c(cmd.city)} 세율 → ${TAX_LABEL[cmd.tax]}`;
+    case 'appoint':
+      return cmd.general ? `${c(cmd.city)} 태수 임명: ${g(cmd.general)}` : `${c(cmd.city)} 태수 해임`;
+    case 'build':
+      return `${g(cmd.general)}: ${FACILITY_LABEL[cmd.facility]} 건설`;
+    case 'scheme':
+      return `${g(cmd.general)}: ${c(cmd.to)}에 ${SCHEME_LABEL[cmd.kind]}${cmd.target ? ` (${g(cmd.target)})` : ''}`;
     case 'propose':
       return `${f(cmd.to)}에 ${cmd.kind === 'alliance' ? '동맹' : '정전'} 제안`;
     case 'respond': {
@@ -53,6 +61,7 @@ export function describe(cmd: Command, view: GameView): string {
 /** 명령에서 행동하는 장수 목록 */
 export function actorsOf(cmd: Command): string[] {
   if (cmd.type === 'attack') return cmd.generals;
+  if (cmd.type === 'appoint') return [];
   if ('general' in cmd) return [cmd.general];
   return [];
 }

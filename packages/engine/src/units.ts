@@ -1,4 +1,5 @@
 import type { GeneralState } from './types';
+import { DEFAULT_RULES, type Rules } from './rules';
 
 export const UNIT_TYPES = ['spear', 'cavalry', 'archer', 'navy', 'siege'] as const;
 export type UnitType = (typeof UNIT_TYPES)[number];
@@ -12,43 +13,17 @@ export const UNIT_LABEL: Record<UnitType, string> = {
   siege: '공성',
 };
 
-/** 징병 비용: 10명당 금 */
-export const DRAFT_COST_PER_10: Record<UnitType, number> = {
-  spear: 1,
-  archer: 1.5,
-  cavalry: 3,
-  navy: 2,
-  siege: 4,
-};
-
 export const BATTLE_ROUNDS = 10;
-/** 교전 손실 계수 */
-export const BATTLE_K = 0.25;
-/** 수비가 빈 라운드에 예비대가 입는 피해 비율 (공격 전투력 대비) */
-export const EMPTY_ROUND_RESERVE_RATE = 0.04;
-/** 성벽 피해: 공격 전투력 / 이 값 */
-export const WALL_DAMAGE_DIV = 100;
-export const SIEGE_WALL_MUL = 5;
-/** 수비 투입분이 전멸하고 남은 피해 1명당 성벽 피해 (성벽이 0이면 예비대가 받는다) */
-export const WALL_PER_EXCESS_TROOP = 1;
-
-/** 상성: MATCHUP[내 병종][상대 병종] = 내 전투 질 배율 */
-export const MATCHUP: Record<UnitType, Record<UnitType, number>> = {
-  spear: { spear: 1, cavalry: 1.5, archer: 0.7, navy: 1, siege: 1.3 },
-  cavalry: { spear: 0.7, cavalry: 1, archer: 1.5, navy: 1.1, siege: 1.5 },
-  archer: { spear: 1.5, cavalry: 0.7, archer: 1, navy: 1.2, siege: 1.2 },
-  navy: { spear: 1, cavalry: 1, archer: 1, navy: 1, siege: 1 },
-  siege: { spear: 0.5, cavalry: 0.5, archer: 0.5, navy: 0.5, siege: 0.5 },
-};
 
 /** 지형 배율: 강을 끼는 도로인지에 따라 */
-export function terrainMul(unit: UnitType, river: boolean): number {
+export function terrainMul(unit: UnitType, river: boolean, r: Rules = DEFAULT_RULES): number {
+  const t = r.battle.terrain;
   if (river) {
-    if (unit === 'navy') return 1.6;
-    if (unit === 'cavalry') return 0.7;
+    if (unit === 'navy') return t.riverNavy;
+    if (unit === 'cavalry') return t.riverCavalry;
     return 1;
   }
-  return unit === 'navy' ? 0.6 : 1;
+  return unit === 'navy' ? t.landNavy : 1;
 }
 
 /** 장수 병종 적성 (0~100) */
@@ -99,8 +74,9 @@ export function parseUnits(raw: unknown): Units | null {
   return out;
 }
 
-export function draftCost(unit: UnitType, amount: number): number {
-  return Math.ceil((amount / 10) * DRAFT_COST_PER_10[unit]);
+/** 징병 비용. discount는 병영 할인율(0~1) */
+export function draftCost(unit: UnitType, amount: number, r: Rules = DEFAULT_RULES, discount = 0): number {
+  return Math.ceil((amount / 10) * r.military.draftCostPer10[unit] * Math.max(0, 1 - discount));
 }
 
 /** 병력을 병종 비율대로 차감한다 (탈영·예비대 피해 등). 실제 차감량 반환 */

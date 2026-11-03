@@ -1,5 +1,6 @@
 export * from './types';
 export * from './units';
+export * from './rules';
 export * from './rng';
 export * from './util';
 export * from './init';

@@ -8,6 +8,8 @@ import type { Command } from '@ch/engine';
 import { AuthError, login, logout, register, userByToken, type User } from './auth';
 import { openDb } from './db';
 import { GameError, GameService, type GameEvent } from './games';
+import { AdminService } from './admin';
+import { DEFAULT_RULES, RULE_LABELS, diffRules, validateRulesPatch } from '@ch/engine';
 
 export interface AppOptions {
   dbPath: string;
@@ -41,7 +43,8 @@ function bearer(req: FastifyRequest): string | undefined {
 
 export async function buildApp(opts: AppOptions) {
   const db = openDb(opts.dbPath);
-  const games = new GameService(db, opts.now);
+  const admin = new AdminService(db);
+  const games = new GameService(db, opts.now, () => admin.effectiveRules());
   const app = Fastify({ logger: opts.logger ?? false });
 
   app.setErrorHandler((err, _req, reply) => {
@@ -78,6 +81,51 @@ export async function buildApp(opts: AppOptions) {
     return { ok: true };
   });
   app.get('/api/me', async (req, reply) => ({ user: requireUser(req, reply) }));
+
+  const requireAdmin = (req: FastifyRequest, reply: FastifyReply): User => {
+    const u = requireUser(req, reply);
+    if (!u.isAdmin) throw new GameError('admin 권한이 필요하다', 403);
+    return u;
+  };
+
+  // ── admin ──
+  app.get('/api/admin/rules', async (req, reply) => {
+    requireAdmin(req, reply);
+    return { defaults: DEFAULT_RULES, overrides: admin.overrides(), effective: admin.effectiveRules(), labels: RULE_LABELS };
+  });
+  app.put('/api/admin/rules', async (req, reply) => {
+    requireAdmin(req, reply);
+    const overrides = admin.setOverrides((req.body as { overrides?: unknown })?.overrides ?? {});
+    return { defaults: DEFAULT_RULES, overrides, effective: admin.effectiveRules(), labels: RULE_LABELS };
+  });
+  app.get('/api/admin/games/:id/rules', async (req, reply) => {
+    requireAdmin(req, reply);
+    const rules = games.gameRules(IdParam.parse(req.params).id);
+    return { rules, overridesFromDefault: diffRules(DEFAULT_RULES, rules), labels: RULE_LABELS };
+  });
+  app.patch('/api/admin/games/:id/rules', async (req, reply) => {
+    requireAdmin(req, reply);
+    const patch = (req.body as { patch?: unknown })?.patch ?? {};
+    const err = validateRulesPatch(patch);
+    if (err) throw new GameError(err);
+    const rules = games.updateGameRules(IdParam.parse(req.params).id, patch);
+    return { rules, overridesFromDefault: diffRules(DEFAULT_RULES, rules), labels: RULE_LABELS };
+  });
+  app.post('/api/admin/games/:id/resolve', async (req, reply) => {
+    requireAdmin(req, reply);
+    const id = IdParam.parse(req.params).id;
+    games.resolve(id, true);
+    return games.get(id);
+  });
+  app.get('/api/admin/users', async (req, reply) => {
+    requireAdmin(req, reply);
+    return admin.users();
+  });
+  app.post('/api/admin/users/:id', async (req, reply) => {
+    const me = requireAdmin(req, reply);
+    const body = z.object({ isAdmin: z.boolean() }).parse(req.body);
+    return admin.setAdmin(me.id, IdParam.parse(req.params).id, body.isAdmin);
+  });
 
   // ── 로비 ──
   app.get('/api/scenarios', async () => listScenarios());

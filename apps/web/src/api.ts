@@ -1,8 +1,29 @@
-import type { Command, GameView } from '@ch/engine';
+import type { Command, GameView, Rules } from '@ch/engine';
 
 export interface User {
   id: number;
   name: string;
+  isAdmin: boolean;
+}
+
+export interface AdminRules {
+  defaults: Rules;
+  overrides: Record<string, unknown>;
+  effective: Rules;
+  labels: Record<string, string>;
+}
+
+export interface GameRules {
+  rules: Rules;
+  overridesFromDefault: Record<string, unknown>;
+  labels: Record<string, string>;
+}
+
+export interface AdminUser {
+  id: number;
+  name: string;
+  isAdmin: boolean;
+  createdAt: number;
 }
 
 export interface Seat {
@@ -115,6 +136,15 @@ export const api = {
   ready: (id: number, turn: number, ready: boolean) => req<GameSummary>('POST', `/api/games/${id}/ready`, { turn, ready }),
   messages: (id: number) => req<ChatMessage[]>('GET', `/api/games/${id}/messages`),
   post: (id: number, text: string, to: string | null) => req<ChatMessage>('POST', `/api/games/${id}/messages`, { text, to }),
+  admin: {
+    rules: () => req<AdminRules>('GET', '/api/admin/rules'),
+    saveRules: (overrides: unknown) => req<AdminRules>('PUT', '/api/admin/rules', { overrides }),
+    gameRules: (id: number) => req<GameRules>('GET', `/api/admin/games/${id}/rules`),
+    patchGameRules: (id: number, patch: unknown) => req<GameRules>('PATCH', `/api/admin/games/${id}/rules`, { patch }),
+    resolve: (id: number) => req<GameSummary>('POST', `/api/admin/games/${id}/resolve`),
+    users: () => req<AdminUser[]>('GET', '/api/admin/users'),
+    setAdmin: (id: number, isAdmin: boolean) => req<AdminUser[]>('POST', `/api/admin/users/${id}`, { isAdmin }),
+  },
 };
 
 /** 서버 푸시 구독. 끊기면 자동 재연결. */

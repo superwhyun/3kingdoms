@@ -4,9 +4,10 @@ import { useApp } from './store';
 import { Login } from './components/Login';
 import { Lobby } from './components/Lobby';
 import { GameScreen } from './components/GameScreen';
+import { Admin } from './components/Admin';
 
 export function App() {
-  const { user, gameId, setUser } = useApp();
+  const { user, gameId, adminOpen, setUser } = useApp();
   const [checking, setChecking] = useState(!!getToken());
 
   useEffect(() => {
@@ -21,7 +22,7 @@ export function App() {
   useEffect(() => {
     const onHash = () => {
       const m = location.hash.match(/^#game\/(\d+)$/);
-      useApp.setState({ gameId: m ? Number(m[1]) : null });
+      useApp.setState({ gameId: m ? Number(m[1]) : null, adminOpen: location.hash === '#admin' });
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
@@ -29,5 +30,6 @@ export function App() {
 
   if (checking) return <div className="center muted">불러오는 중…</div>;
   if (!user) return <Login />;
+  if (adminOpen && user.isAdmin) return <Admin />;
   return gameId ? <GameScreen key={gameId} gameId={gameId} /> : <Lobby />;
 }

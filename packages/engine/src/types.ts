@@ -1,4 +1,7 @@
 import type { UnitType, Units } from './units';
+import type { FacilityType, Rules, SchemeType, TaxLevel } from './rules';
+
+export type { FacilityType, Rules, SchemeType, TaxLevel } from './rules';
 
 export type { UnitType, Units } from './units';
 
@@ -26,6 +29,13 @@ export interface CityState {
   training: number;
   /** 상시 수비 전략 (null이면 자동) */
   defensePlan: RoundPlan[] | null;
+  tax: TaxLevel;
+  /** 태수 (아군 장수) */
+  governor: GeneralId | null;
+  /** 시설 레벨 */
+  facilities: Record<FacilityType, number>;
+  /** 건설 중인 시설 */
+  construction: { facility: FacilityType; monthsLeft: number } | null;
 }
 
 /** 전투 1라운드 배치 계획 */
@@ -144,7 +154,9 @@ export interface LogEntry {
 }
 
 export interface GameState {
-  version: 2;
+  version: 3;
+  /** 이 게임의 규칙 조정값 */
+  rules: Rules;
   scenarioId: string;
   year: number;
   month: number;
@@ -184,6 +196,10 @@ export type Command =
   | { type: 'transport'; general: GeneralId; to: CityId; gold: number; food: number; units: Partial<Units> }
   | { type: 'attack'; generals: GeneralId[]; to: CityId; units: Partial<Units>; food: number; plan: RoundPlan[] }
   | { type: 'setDefense'; city: CityId; plan: RoundPlan[] | null }
+  | { type: 'setTax'; city: CityId; tax: TaxLevel }
+  | { type: 'appoint'; city: CityId; general: GeneralId | null }
+  | { type: 'build'; general: GeneralId; facility: FacilityType }
+  | { type: 'scheme'; general: GeneralId; kind: SchemeType; to: CityId; target?: GeneralId }
   | { type: 'propose'; to: FactionId; kind: ProposalKind }
   | { type: 'respond'; proposal: number; accept: boolean }
   | { type: 'break'; to: FactionId }

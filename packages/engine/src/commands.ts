@@ -1,18 +1,45 @@
 import { checkPlan, normalizePlan, resolveBattle } from './battle';
 import type { Rng } from './rng';
-import type { Command, FactionId, GameState, GeneralState } from './types';
-import { BATTLE_ROUNDS, UNIT_LABEL, UNIT_TYPES, draftCost, isUnitType, parseUnits, sumUnits } from './units';
-import { clamp, factionName, getRelation, isAdjacent, isHostile, josa, pushLog, totalTroops } from './util';
-
-export const DEVELOP_COST = 50;
-export const MAX_DEV = 999;
-export const MAX_ATTACK_GENERALS = 5;
-export const MIN_DRAFT = 100;
+import type { CityId, Command, FactionId, GameState, GeneralState } from './types';
+import { BATTLE_ROUNDS, UNIT_LABEL, UNIT_TYPES, draftCost, isUnitType, parseUnits, removeProportional, sumUnits } from './units';
+import { clamp, factionName, generalsIn, getRelation, isAdjacent, isHostile, josa, pushLog, totalTroops } from './util';
+import { DEFAULT_RULES, FACILITY_TYPES, SCHEME_TYPES, TAX_LEVELS, type FacilityType, type Rules, type SchemeType, type TaxLevel } from './rules';
 
 /** 거래 시세: 상업이 높을수록 유리. buy=금 1당 군량, sell=금 1을 얻는 데 드는 군량 */
-export function tradeRate(commerce: number): { buy: number; sell: number } {
+export function tradeRate(commerce: number, r: Rules = DEFAULT_RULES): { buy: number; sell: number } {
+  const e = r.economy;
   const t = Math.min(commerce, 999) / 999;
-  return { buy: 6 + 4 * t, sell: 14 - 4 * t };
+  return { buy: e.tradeBuyMin + (e.tradeBuyMax - e.tradeBuyMin) * t, sell: e.tradeSellMax - (e.tradeSellMax - e.tradeSellMin) * t };
+}
+
+export const FACILITY_LABEL: Record<FacilityType, string> = {
+  market: '시장',
+  farm: '농장',
+  barracks: '병영',
+  drillyard: '연병장',
+};
+
+export const SCHEME_LABEL: Record<SchemeType, string> = {
+  rumor: '유언비어',
+  incite: '선동',
+  sow: '이간',
+  arson: '방화',
+};
+
+export const TAX_LABEL: Record<TaxLevel, string> = { low: '낮음', normal: '보통', high: '높음' };
+
+/** 병영 레벨에 따른 징병 할인율 */
+export function barracksDiscount(level: number, r: Rules = DEFAULT_RULES): number {
+  return Math.min(0.9, level * r.facility.perLevel.barracks);
+}
+
+/** 계략 성공률 (0~1) */
+export function schemeChance(state: GameState, kind: SchemeType, myInt: number, target: CityId): number {
+  const S = state.rules.scheme;
+  const city = state.cities[target];
+  const defenders = city.owner ? generalsIn(state, target, city.owner) : [];
+  const bestInt = defenders.length ? Math.max(...defenders.map((g) => g.int)) : 40;
+  return clamp(S.baseChance[kind] + (myInt - bestInt) * S.skillMul, 5, 95) / 100;
 }
 
 export interface ExecContext {
@@ -69,6 +96,7 @@ export function executeCommand(state: GameState, faction: FactionId, cmd: Comman
   if (!f || !f.alive) return '세력이 존재하지 않는다';
   const rng = ctx.rng;
   const own = [faction];
+  const R = state.rules;
 
   switch (cmd.type) {
     case 'develop': {
@@ -76,18 +104,20 @@ export function executeCommand(state: GameState, faction: FactionId, cmd: Comman
       if (typeof g === 'string') return g;
       if (!(cmd.field in DEV_LABEL)) return '잘못된 개발 항목';
       const city = state.cities[g.city];
-      if (city.gold < DEVELOP_COST) return `${city.name}: 금이 부족하다 (${DEVELOP_COST} 필요)`;
-      if (cmd.field === 'loyalty' ? city.loyalty >= 100 : city[cmd.field] >= MAX_DEV) return `${city.name}: 이미 최대치다`;
-      city.gold -= DEVELOP_COST;
+      const cost = R.domestic.developCost;
+      const maxDev = R.domestic.maxDev;
+      if (city.gold < cost) return `${city.name}: 금이 부족하다 (${cost} 필요)`;
+      if (cmd.field === 'loyalty' ? city.loyalty >= 100 : city[cmd.field] >= maxDev) return `${city.name}: 이미 최대치다`;
+      city.gold -= cost;
       ctx.acted.add(g.id);
       let gain: number;
       if (cmd.field === 'loyalty') {
-        gain = Math.max(1, Math.floor(g.cha / 12) + rng.int(0, 3));
+        gain = Math.max(1, Math.floor(g.cha / R.domestic.loyaltyStatDiv) + rng.int(0, 3));
         city.loyalty = clamp(city.loyalty + gain, 0, 100);
       } else {
         const stat = cmd.field === 'defense' ? Math.round((g.pol + g.war) / 2) : g.pol;
-        gain = Math.max(1, Math.floor(stat / 5) + rng.int(0, 6));
-        city[cmd.field] = clamp(city[cmd.field] + gain, 0, MAX_DEV);
+        gain = Math.max(1, Math.floor(stat / R.domestic.developStatDiv) + rng.int(0, 6));
+        city[cmd.field] = clamp(city[cmd.field] + gain, 0, maxDev);
       }
       pushLog(state, 'domestic', `${city.name}: ${josa(g.name, '이', '가')} ${DEV_LABEL[cmd.field]} +${gain}`, own, city.id);
       return null;
@@ -96,18 +126,19 @@ export function executeCommand(state: GameState, faction: FactionId, cmd: Comman
     case 'draft': {
       const g = actor(state, faction, cmd.general, ctx);
       if (typeof g === 'string') return g;
-      if (!isInt(cmd.amount, MIN_DRAFT)) return `징병 수는 ${MIN_DRAFT} 이상의 정수`;
+      const minDraft = R.military.minDraft;
+      if (!isInt(cmd.amount, minDraft)) return `징병 수는 ${minDraft} 이상의 정수`;
       if (!isUnitType(cmd.unit)) return '알 수 없는 병종';
       const city = state.cities[g.city];
       if (cmd.unit === 'navy' && !(state.rivers[city.id]?.length > 0)) return `${city.name}: 강을 끼지 않은 도시는 수군을 징병할 수 없다`;
-      const cost = draftCost(cmd.unit, cmd.amount);
+      const cost = draftCost(cmd.unit, cmd.amount, R, barracksDiscount(city.facilities.barracks, R));
       if (city.gold < cost) return `${city.name}: 금이 부족하다 (${cost} 필요)`;
-      const limit = Math.floor(city.population / 20);
+      const limit = Math.floor(city.population / R.military.draftPopDiv);
       if (cmd.amount > limit) return `${city.name}: 징병 가능 인원 초과 (최대 ${limit})`;
       city.gold -= cost;
       city.population -= cmd.amount;
       const cur = totalTroops(city);
-      city.training = Math.round((cur * city.training + cmd.amount * 20) / (cur + cmd.amount));
+      city.training = Math.round((cur * city.training + cmd.amount * R.military.recruitTraining) / (cur + cmd.amount));
       city.units[cmd.unit] += cmd.amount;
       city.loyalty = clamp(city.loyalty - Math.ceil(cmd.amount / 1000), 0, 100);
       ctx.acted.add(g.id);
@@ -121,7 +152,7 @@ export function executeCommand(state: GameState, faction: FactionId, cmd: Comman
       const city = state.cities[g.city];
       if (totalTroops(city) <= 0) return `${city.name}: 훈련할 병사가 없다`;
       if (city.training >= 100) return `${city.name}: 훈련도가 이미 최대다`;
-      const gain = 3 + Math.floor(g.war / 10) + rng.int(0, 3);
+      const gain = R.military.trainBase + Math.floor(g.war / 10) + rng.int(0, 3) + Math.round(city.facilities.drillyard * R.facility.perLevel.drillyard);
       city.training = clamp(city.training + gain, 0, 100);
       ctx.acted.add(g.id);
       pushLog(state, 'domestic', `${city.name}: ${josa(g.name, '이', '가')} 병사를 훈련했다 (훈련도 +${gain})`, own, city.id);
@@ -134,7 +165,7 @@ export function executeCommand(state: GameState, faction: FactionId, cmd: Comman
       if (cmd.action !== 'buy' && cmd.action !== 'sell') return '잘못된 거래 종류';
       if (!isInt(cmd.gold, 10)) return '거래 금액은 10 이상의 정수';
       const city = state.cities[g.city];
-      const rate = tradeRate(city.commerce);
+      const rate = tradeRate(city.commerce, R);
       if (cmd.action === 'buy') {
         if (city.gold < cmd.gold) return `${city.name}: 금이 부족하다`;
         const food = Math.floor(cmd.gold * rate.buy);
@@ -296,8 +327,9 @@ export function executeCommand(state: GameState, faction: FactionId, cmd: Comman
     }
 
     case 'attack': {
-      if (!Array.isArray(cmd.generals) || cmd.generals.length < 1 || cmd.generals.length > MAX_ATTACK_GENERALS) {
-        return `출진 장수는 1~${MAX_ATTACK_GENERALS}명`;
+      const maxGen = R.battle.maxAttackGenerals;
+      if (!Array.isArray(cmd.generals) || cmd.generals.length < 1 || cmd.generals.length > maxGen) {
+        return `출진 장수는 1~${maxGen}명`;
       }
       if (new Set(cmd.generals).size !== cmd.generals.length) return '중복된 장수';
       const gens: GeneralState[] = [];
@@ -373,6 +405,124 @@ export function executeCommand(state: GameState, faction: FactionId, cmd: Comman
       return null;
     }
 
+    case 'setTax': {
+      const city = state.cities[cmd.city];
+      if (!city || city.owner !== faction) return '아군 도시가 아니다';
+      if (!(TAX_LEVELS as readonly string[]).includes(cmd.tax)) return '잘못된 세율';
+      city.tax = cmd.tax;
+      pushLog(state, 'domestic', `${city.name}: 세율을 '${TAX_LABEL[cmd.tax]}'(으)로 정했다`, own, city.id);
+      return null;
+    }
+
+    case 'appoint': {
+      const city = state.cities[cmd.city];
+      if (!city || city.owner !== faction) return '아군 도시가 아니다';
+      if (cmd.general === null) {
+        city.governor = null;
+        pushLog(state, 'personnel', `${city.name}: 태수를 해임했다`, own, city.id);
+        return null;
+      }
+      const g = state.generals[cmd.general];
+      if (!g || g.status !== 'active' || g.faction !== faction) return '아군 장수가 아니다';
+      if (g.city !== city.id) return `${g.name}: ${city.name}에 있지 않다`;
+      for (const c of Object.values(state.cities)) if (c.governor === g.id) c.governor = null;
+      city.governor = g.id;
+      pushLog(state, 'personnel', `${city.name}: ${josa(g.name, '을', '를')} 태수로 임명했다`, own, city.id);
+      return null;
+    }
+
+    case 'build': {
+      const g = actor(state, faction, cmd.general, ctx);
+      if (typeof g === 'string') return g;
+      if (!(FACILITY_TYPES as readonly string[]).includes(cmd.facility)) return '알 수 없는 시설';
+      const city = state.cities[g.city];
+      if (city.construction) return `${city.name}: 이미 ${FACILITY_LABEL[city.construction.facility]}을(를) 짓고 있다`;
+      const level = city.facilities[cmd.facility];
+      if (level >= R.facility.maxLevel) return `${city.name}: ${FACILITY_LABEL[cmd.facility]}이(가) 이미 최고 레벨이다`;
+      const cost = R.facility.cost[cmd.facility] * (level + 1);
+      if (city.gold < cost) return `${city.name}: 금이 부족하다 (${cost} 필요)`;
+      city.gold -= cost;
+      city.construction = { facility: cmd.facility, monthsLeft: Math.max(1, Math.round(R.facility.months[cmd.facility])) };
+      ctx.acted.add(g.id);
+      pushLog(
+        state,
+        'domestic',
+        `${city.name}: ${josa(g.name, '이', '가')} ${FACILITY_LABEL[cmd.facility]} ${level + 1}단계 건설을 시작했다 (${city.construction.monthsLeft}개월)`,
+        own,
+        city.id,
+      );
+      return null;
+    }
+
+    case 'scheme': {
+      const g = actor(state, faction, cmd.general, ctx);
+      if (typeof g === 'string') return g;
+      if (!(SCHEME_TYPES as readonly string[]).includes(cmd.kind)) return '알 수 없는 계략';
+      const target = state.cities[cmd.to];
+      if (!target) return '알 수 없는 도시';
+      if (!isAdjacent(state, g.city, target.id)) return `${target.name}: 인접한 도시가 아니다`;
+      if (!target.owner || target.owner === faction) return `${target.name}: 적 세력 도시가 아니다`;
+      if (!isHostile(state, faction, target.owner)) return `${target.name}: 동맹·정전 중인 세력이다`;
+      let victim: GeneralState | undefined;
+      if (cmd.kind === 'sow') {
+        const rulerIds = new Set(Object.values(state.factions).map((x) => x.ruler));
+        const pool = generalsIn(state, target.id, target.owner).filter((x) => !rulerIds.has(x.id));
+        if (cmd.target) {
+          victim = pool.find((x) => x.id === cmd.target);
+          if (!victim) return '이간 대상이 그 도시의 (군주가 아닌) 적 장수가 아니다';
+        } else {
+          victim = pool.sort((a, b) => a.loyalty - b.loyalty)[0];
+          if (!victim) return `${target.name}: 이간할 장수가 없다`;
+        }
+      }
+      const city = state.cities[g.city];
+      const cost = R.scheme.cost[cmd.kind];
+      if (city.gold < cost) return `${city.name}: 금이 부족하다 (${cost} 필요)`;
+      city.gold -= cost;
+      ctx.acted.add(g.id);
+      if (ctx.dry) return null;
+      const S = R.scheme;
+      const label = SCHEME_LABEL[cmd.kind];
+      const victimFaction = target.owner;
+      if (rng.chance(schemeChance(state, cmd.kind, g.int, target.id))) {
+        let effect = '';
+        switch (cmd.kind) {
+          case 'rumor':
+            target.loyalty = clamp(target.loyalty - S.rumorLoyalty, 0, 100);
+            effect = `민심 −${S.rumorLoyalty}`;
+            break;
+          case 'incite': {
+            target.training = clamp(target.training - S.inciteTraining, 0, 100);
+            const lost = removeProportional(target.units, Math.floor(totalTroops(target) * S.inciteDesertion));
+            effect = `훈련 −${S.inciteTraining}, 병사 ${lost}명 이탈`;
+            break;
+          }
+          case 'sow':
+            victim!.loyalty = clamp(victim!.loyalty - S.sowLoyalty, 0, 100);
+            effect = `${victim!.name} 충성 −${S.sowLoyalty}`;
+            break;
+          case 'arson': {
+            const food = Math.floor(target.food * S.arsonFood);
+            const gold = Math.floor(target.gold * S.arsonGold);
+            target.food -= food;
+            target.gold -= gold;
+            effect = `군량 −${food}, 금 −${gold}`;
+            break;
+          }
+        }
+        pushLog(state, 'military', `${josa(g.name, '이', '가')} ${target.name}에 ${label} 성공 (${effect})`, own, target.id);
+        pushLog(state, 'military', `${target.name}: 누군가의 ${label}에 당했다 (${effect})`, [victimFaction], target.id);
+      } else if (rng.chance(S.discoverChance / 100)) {
+        const rel = getRelation(state, faction, victimFaction);
+        rel.friendship = clamp(rel.friendship - S.discoverFriendship, 0, 100);
+        pushLog(state, 'military', `${josa(g.name, '의', '의')} ${target.name} ${label}이(가) 발각되었다`, own, target.id);
+        pushLog(state, 'military', `${target.name}: ${f.name} ${josa(g.name, '의', '의')} ${label}을(를) 간파했다`, [victimFaction], target.id);
+      } else {
+        pushLog(state, 'military', `${josa(g.name, '의', '의')} ${target.name} ${label}이(가) 실패했다`, own, target.id);
+      }
+      return null;
+    }
+
     case 'propose': {
       const other = state.factions[cmd.to];
       if (!other || !other.alive || other.id === faction) return '대상 세력이 올바르지 않다';
@@ -403,7 +553,7 @@ export function executeCommand(state: GameState, faction: FactionId, cmd: Comman
       const was = rel.status === 'alliance' ? '동맹' : '정전';
       rel.status = 'neutral';
       rel.truceUntil = null;
-      rel.friendship = clamp(rel.friendship - 40, 0, 100);
+      rel.friendship = clamp(rel.friendship - R.diplomacy.breakFriendship, 0, 100);
       pushLog(state, 'diplomacy', `${josa(f.name, '이', '가')} ${josa(other.name, '과', '와')}의 ${josa(was, '을', '를')} 파기했다`);
       return null;
     }
@@ -448,7 +598,7 @@ export function applyProposalAnswer(
     return;
   }
   rel.status = kind;
-  rel.truceUntil = kind === 'truce' ? state.turn + 12 : null;
+  rel.truceUntil = kind === 'truce' ? state.turn + state.rules.diplomacy.truceMonths : null;
   rel.friendship = clamp(rel.friendship + 10, 0, 100);
   pushLog(state, 'diplomacy', `${josa(a, '과', '와')} ${josa(b, '이', '가')} ${josa(label, '을', '를')} 맺었다`);
 }

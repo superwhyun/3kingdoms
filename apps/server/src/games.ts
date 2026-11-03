@@ -2,6 +2,7 @@ import { randomInt } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { getScenario } from '@ch/data';
 import {
+  applyRulesPatch,
   createGame as createState,
   resolveTurn,
   validateOrders,
@@ -9,6 +10,7 @@ import {
   type Command,
   type GameState,
   type Orders,
+  type Rules,
 } from '@ch/engine';
 import { tx, type DB } from './db';
 import type { User } from './auth';
@@ -16,7 +18,7 @@ import type { User } from './auth';
 export type GameStatus = 'lobby' | 'running' | 'finished';
 
 /** 현재 엔진이 다루는 상태 버전 */
-export const STATE_VERSION = 2;
+export const STATE_VERSION = 3;
 
 function loadState(r: { state_json: string }): GameState {
   const s = JSON.parse(r.state_json) as GameState;
@@ -91,6 +93,8 @@ export class GameService {
   constructor(
     private db: DB,
     private now: () => number = Date.now,
+    /** 새 게임에 쓸 기본 규칙 */
+    private defaultRules: () => Rules | undefined = () => undefined,
   ) {
     // 구버전 상태의 게임은 종료 처리해 스케줄러가 건드리지 않게 한다
     const rows = this.db.prepare("SELECT id, state_json FROM games WHERE status != 'finished'").all() as { id: number; state_json: string }[];
@@ -142,6 +146,25 @@ export class GameService {
     };
   }
 
+  /** 게임의 현재 규칙 */
+  gameRules(gameId: number): Rules {
+    return loadState(this.row(gameId)).rules;
+  }
+
+  /** 게임 규칙을 patch로 수정한다 (다음 턴 해결부터 적용). patch는 호출 측에서 검증한다 */
+  updateGameRules(gameId: number, patch: unknown): Rules {
+    let rules!: Rules;
+    tx(this.db, () => {
+      const g = this.row(gameId);
+      const state = loadState(g);
+      state.rules = applyRulesPatch(state.rules, patch);
+      rules = state.rules;
+      this.db.prepare('UPDATE games SET state_json = ? WHERE id = ?').run(JSON.stringify(state), gameId);
+    });
+    this.emit({ type: 'game', gameId });
+    return rules;
+  }
+
   list(): GameSummary[] {
     const rows = this.db.prepare('SELECT * FROM games ORDER BY id DESC LIMIT 100').all() as unknown as GameRow[];
     return rows.map((r) => this.summary(r));
@@ -158,7 +181,7 @@ export class GameService {
     } catch {
       throw new GameError('알 수 없는 시나리오');
     }
-    const state = createState(scenario, { seed: randomInt(0, 2 ** 31), endYear: opts.endYear });
+    const state = createState(scenario, { seed: randomInt(0, 2 ** 31), endYear: opts.endYear, rules: this.defaultRules() });
     const r = this.db
       .prepare(
         'INSERT INTO games (name, scenario_id, owner_id, status, turn_minutes, deadline, state_json, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)',

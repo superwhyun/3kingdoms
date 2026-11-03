@@ -4,8 +4,7 @@ import {
   autoPlan,
   clashLosses,
   excessToWall,
-  WALL_PER_EXCESS_TROOP,
-  SIEGE_WALL_MUL,
+  DEFAULT_RULES,
   createGame,
   emptyUnits,
   resolveTurn,
@@ -19,6 +18,8 @@ import {
 } from '../src';
 
 const scenario = getScenario('y190');
+const WALL_PER_EXCESS_TROOP = DEFAULT_RULES.battle.wallPerExcessTroop;
+const SIEGE_WALL_MUL = DEFAULT_RULES.battle.siegeWallMul;
 const U = (u: Partial<Units>): Units => ({ ...emptyUnits(), ...u });
 const P = (...rounds: [RoundPlan['unit'], number][]): RoundPlan[] => rounds.map(([unit, count]) => ({ general: null, unit, count }));
 

@@ -1,13 +1,12 @@
 import { autoPlan, estimateOdds } from './battle';
-import { DEVELOP_COST, MAX_ATTACK_GENERALS, MAX_DEV, tradeRate } from './commands';
+import { barracksDiscount, schemeChance, tradeRate } from './commands';
+import type { TaxLevel } from './rules';
 import { harvestAmount } from './economy';
 import type { Rng } from './rng';
 import type { CityState, Command, FactionId, GameState, GeneralState, Proposal, RoundPlan } from './types';
 import { UNIT_TYPES, draftCost, emptyUnits, sumUnits, type UnitType, type Units } from './units';
 import { citiesOf, factionPower, generalsIn, getRelation, isHostile, totalTroops } from './util';
 
-/** AI가 공격을 시작하는 최소 턴 (초반 유예) */
-export const AI_GRACE_TURNS = 3;
 
 function hostileNeighbors(state: GameState, faction: FactionId, city: CityState): CityState[] {
   return state.roads[city.id]
@@ -54,6 +53,9 @@ export function planAI(state: GameState, faction: FactionId, rng: Rng): Command[
   const cmds: Command[] = [];
   const f = state.factions[faction];
   if (!f?.alive) return cmds;
+  const R = state.rules;
+  const DEVELOP_COST = R.domestic.developCost;
+  const MAX_DEV = R.domestic.maxDev;
   const cities = citiesOf(state, faction);
   const frontierIds = new Set(cities.filter((c) => hostileNeighbors(state, faction, c).length > 0).map((c) => c.id));
 
@@ -72,8 +74,16 @@ export function planAI(state: GameState, faction: FactionId, rng: Rng): Command[
     const enemies = hostileNeighbors(state, faction, city);
 
     // 1. 공격
-    if (state.turn >= AI_GRACE_TURNS && enemies.length && troops >= 4000 && rng.chance(0.7)) {
-      const army = avail.slice(0, Math.min(Math.max(1, avail.length - 1), MAX_ATTACK_GENERALS));
+    // 0. 태수·세율 (행동 소모 없음)
+    if (!city.governor || !avail.some((g) => g.id === city.governor)) {
+      const gov = [...avail].sort((a, b) => b.pol - a.pol)[0];
+      cmds.push({ type: 'appoint', city: city.id, general: gov.id });
+    }
+    const wantTax: TaxLevel = city.loyalty < 50 ? 'low' : city.loyalty > 85 ? 'high' : 'normal';
+    if (city.tax !== wantTax) cmds.push({ type: 'setTax', city: city.id, tax: wantTax });
+
+    if (state.turn >= R.ai.graceTurns && enemies.length && troops >= 4000 && rng.chance(R.ai.attackChance)) {
+      const army = avail.slice(0, Math.min(Math.max(1, avail.length - 1), R.battle.maxAttackGenerals));
       const armyTroops = Math.floor(troops * 0.8);
       let best: { target: CityState; odds: number } | null = null;
       for (const t of enemies) {
@@ -81,7 +91,7 @@ export function planAI(state: GameState, faction: FactionId, rng: Rng): Command[
         // 중립 도시보다 적 세력 도시를 약간 선호하지 않도록 동일 취급
         if (!best || odds > best.odds) best = { target: t, odds };
       }
-      if (best && best.odds >= 1.5) {
+      if (best && best.odds >= R.ai.attackOdds) {
         const needFood = Math.ceil(armyTroops / 200) * 12 + 100;
         const armyFood = Math.min(Math.floor(food * 0.7), needFood);
         if (armyFood >= Math.ceil(armyTroops / 200) * 6) {
@@ -123,8 +133,8 @@ export function planAI(state: GameState, faction: FactionId, rng: Rng): Command[
     }
 
     // 4. 군량 매입/매각
-    const monthlyNeed = Math.ceil(troops / 60);
-    const rate = tradeRate(city.commerce);
+    const monthlyNeed = Math.ceil(troops / R.economy.foodUpkeepDiv);
+    const rate = tradeRate(city.commerce, R);
     if (food < monthlyNeed * 8 && budget > 300) {
       const spend = Math.floor(Math.min(budget - 150, ((monthlyNeed * 12 - food) / rate.buy)) / 10) * 10;
       if (spend >= 10) {
@@ -150,18 +160,19 @@ export function planAI(state: GameState, faction: FactionId, rng: Rng): Command[
     // 5. 징병 (군량이 버틸 수 있는 만큼만)
     const isFrontier = frontierIds.has(city.id);
     const cap = Math.floor(city.population / (isFrontier ? 12 : 25));
-    const yearlyFood = food + (state.month <= 7 ? harvestAmount(city) : 0);
-    const foodCap = Math.floor((yearlyFood / 12) * 60);
+    const yearlyFood = food + (state.month <= R.economy.harvestMonth ? harvestAmount(city, R) : 0);
+    const foodCap = Math.floor((yearlyFood / 12) * R.economy.foodUpkeepDiv);
     const draftUnit = pickDraftUnit(state, city, enemies, rng);
     if (troops < cap && troops < foodCap && budget > 200 && city.loyalty >= 45) {
-      const affordable = Math.floor((budget - 100) / 2 / (draftCost(draftUnit, 1000) / 1000));
-      let amount = Math.min(affordable, cap - troops, foodCap - troops, Math.floor(city.population / 20), 3000);
+      const discount = barracksDiscount(city.facilities.barracks, R);
+      const affordable = Math.floor((budget - 100) / 2 / Math.max(0.001, draftCost(draftUnit, 1000, R, discount) / 1000));
+      let amount = Math.min(affordable, cap - troops, foodCap - troops, Math.floor(city.population / R.military.draftPopDiv), 3000);
       amount = Math.floor(amount / 100) * 100;
       if (amount >= 100) {
         const g = take((x) => x.cha);
         if (g) {
           cmds.push({ type: 'draft', general: g.id, amount, unit: draftUnit });
-          budget -= draftCost(draftUnit, amount);
+          budget -= draftCost(draftUnit, amount, R, discount);
           troops += amount;
         }
       }
@@ -202,13 +213,42 @@ export function planAI(state: GameState, faction: FactionId, rng: Rng): Command[
       const fields: ('agriculture' | 'commerce' | 'defense')[] = isFrontier
         ? ['agriculture', 'commerce', 'defense']
         : ['agriculture', 'commerce'];
-      const open = fields.filter((k) => city[k] < (k === 'defense' ? 600 : MAX_DEV));
+      const open = fields.filter((k) => city[k] < (k === 'defense' ? R.ai.defenseDevCap : MAX_DEV));
       if (!open.length) break;
       const field = open.reduce((a, b) => (city[a] <= city[b] ? a : b));
       const g = take((x) => (field === 'defense' ? x.pol + x.war : x.pol));
       if (!g) break;
       cmds.push({ type: 'develop', general: g.id, field });
       budget -= DEVELOP_COST;
+    }
+
+    // 9-1. 시설 건설 (여유 자금이 있을 때)
+    if (avail.length && !city.construction) {
+      const order = isFrontier ? (['barracks', 'farm', 'market', 'drillyard'] as const) : (['market', 'farm', 'barracks', 'drillyard'] as const);
+      const fac = order.find((f) => city.facilities[f] < R.facility.maxLevel);
+      if (fac) {
+        const cost = R.facility.cost[fac] * (city.facilities[fac] + 1);
+        if (budget >= cost + 300) {
+          const g = take((x) => x.pol);
+          if (g) {
+            cmds.push({ type: 'build', general: g.id, facility: fac });
+            budget -= cost;
+          }
+        }
+      }
+    }
+
+    // 9-2. 계략 (가끔, 지력이 높은 장수로)
+    const enemyTargets = enemies.filter((e) => e.owner);
+    if (avail.length && enemyTargets.length && rng.chance(0.15)) {
+      const g = [...avail].sort((a, b) => b.int - a.int)[0];
+      const tgt = enemyTargets[rng.int(0, enemyTargets.length - 1)];
+      const kind = (['rumor', 'incite', 'arson'] as const)[rng.int(0, 2)];
+      if (g.int >= 60 && budget >= R.scheme.cost[kind] + 200 && schemeChance(state, kind, g.int, tgt.id) >= 0.4) {
+        take((x) => (x.id === g.id ? 1 : 0));
+        cmds.push({ type: 'scheme', general: g.id, kind, to: tgt.id });
+        budget -= R.scheme.cost[kind];
+      }
     }
 
     // 10. 탐색

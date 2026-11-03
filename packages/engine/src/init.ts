@@ -1,6 +1,11 @@
 import type { Scenario } from '@ch/data';
 import type { GameState } from './types';
+import { DEFAULT_RULES, FACILITY_TYPES, type FacilityType, type Rules } from './rules';
 import { emptyUnits, type Units } from './units';
+
+export function emptyFacilities(): Record<FacilityType, number> {
+  return Object.fromEntries(FACILITY_TYPES.map((f) => [f, 0])) as Record<FacilityType, number>;
+}
 import { relationKey } from './util';
 
 /** 시나리오의 단일 병력 값을 기본 병종 비율로 나눈다 */
@@ -17,11 +22,14 @@ export interface CreateGameOptions {
   seed: number;
   /** 이 해가 끝나면 게임 종료. 기본: 시작 연도 + 30 */
   endYear?: number;
+  /** 규칙 조정값. 기본: DEFAULT_RULES */
+  rules?: Rules;
 }
 
 export function createGame(scenario: Scenario, opts: CreateGameOptions): GameState {
   const state: GameState = {
-    version: 2,
+    version: 3,
+    rules: structuredClone(opts.rules ?? DEFAULT_RULES),
     scenarioId: scenario.id,
     year: scenario.startYear,
     month: scenario.startMonth,
@@ -48,6 +56,7 @@ export function createGame(scenario: Scenario, opts: CreateGameOptions): GameSta
       population: c.population, agriculture: c.agriculture, commerce: c.commerce,
       defense: c.defense, loyalty: c.loyalty, gold: c.gold, food: c.food,
       units: splitTroops(c.troops, riverCities.has(c.id)), training: c.training, defensePlan: null,
+      tax: 'normal', governor: null, facilities: emptyFacilities(), construction: null,
     };
     state.roads[c.id] = [];
     state.rivers[c.id] = [];

@@ -6,7 +6,6 @@ import { handleFactionLoss } from './succession';
 import type { Command, FactionId, GameState, Orders } from './types';
 import { citiesOf, factionName, pushLog } from './util';
 
-export const PROPOSAL_TTL = 3;
 
 export interface ResolveOptions {
   /** AI가 대행할 세력 */
@@ -88,10 +87,11 @@ export function resolveTurn(prev: GameState, orders: Orders, opts: ResolveOption
     applyProposalAnswer(state, p.from, p.to, p.kind, aiAcceptsProposal(state, p));
   }
   // 제안 만료
-  for (const p of state.proposals.filter((x) => state.turn - x.turn >= PROPOSAL_TTL)) {
+  const ttl = state.rules.diplomacy.proposalTtl;
+  for (const p of state.proposals.filter((x) => state.turn - x.turn >= ttl)) {
     pushLog(state, 'diplomacy', `${factionName(state, p.from)}의 제안이 응답 없이 만료되었다`, [p.from, p.to]);
   }
-  state.proposals = state.proposals.filter((x) => state.turn - x.turn < PROPOSAL_TTL);
+  state.proposals = state.proposals.filter((x) => state.turn - x.turn < ttl);
 
   runEconomy(state, rng);
 

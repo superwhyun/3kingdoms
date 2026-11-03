@@ -10,16 +10,11 @@ import type {
   GeneralState,
   RoundPlan,
 } from './types';
+import { DEFAULT_RULES, type Rules } from './rules';
 import {
-  BATTLE_K,
   BATTLE_ROUNDS,
-  EMPTY_ROUND_RESERVE_RATE,
-  MATCHUP,
-  SIEGE_WALL_MUL,
   UNIT_LABEL,
   UNIT_TYPES,
-  WALL_DAMAGE_DIV,
-  WALL_PER_EXCESS_TROOP,
   aptitude,
   isUnitType,
   removeProportional,
@@ -28,7 +23,7 @@ import {
   type UnitType,
   type Units,
 } from './units';
-import { citiesOf, clamp, factionName, generalsIn, isAdjacent, isRiver, josa, pushLog, totalTroops } from './util';
+import { citiesOf, clamp, factionName, generalsIn, isAdjacent, isRiver, josa, pushLog, resetCityOwnership, totalTroops } from './util';
 import { handleFactionLoss } from './succession';
 
 export interface Army {
@@ -70,8 +65,8 @@ function leaderOf(generals: GeneralState[]): { war: number; int: number; support
   };
 }
 
-export function defenseMultiplier(city: Pick<CityState, 'defense'>, vsSiege = false): number {
-  return 1 + (city.defense / 1500) * (vsSiege ? 0.5 : 1);
+export function defenseMultiplier(city: Pick<CityState, 'defense'>, vsSiege = false, r: Rules = DEFAULT_RULES): number {
+  return 1 + (city.defense / r.battle.wallBonusDiv) * (vsSiege ? 0.5 : 1);
 }
 
 /** 공격측 추정 전투력 / 수비측 추정 전투력 (병종 상성 무시) */
@@ -84,7 +79,7 @@ export function estimateOdds(
   const defGenerals = target.owner ? generalsIn(state, target.id, target.owner) : [];
   const d = leaderOf(defGenerals);
   const ap = sidePower({ troops: army.troops, training: army.training, ...a });
-  const dp = sidePower({ troops: totalTroops(target), training: target.training, ...d }, defenseMultiplier(target));
+  const dp = sidePower({ troops: totalTroops(target), training: target.training, ...d }, defenseMultiplier(target, false, state.rules));
   return dp <= 0 ? Infinity : ap / dp;
 }
 
@@ -145,12 +140,14 @@ export function unitQuality(opts: {
   general: GeneralState | null;
   river: boolean;
   wall?: number;
+  rules?: Rules;
 }): number {
+  const r = opts.rules ?? DEFAULT_RULES;
   const trainingMul = 0.6 + opts.training / 250;
   const aptMul = 1 + (aptitude(opts.general, opts.unit) - 50) / 100;
-  const match = opts.vs ? MATCHUP[opts.unit][opts.vs] : 1;
-  const wallMul = opts.wall !== undefined ? defenseMultiplier({ defense: opts.wall }, opts.vs === 'siege') : 1;
-  return trainingMul * aptMul * match * terrainMul(opts.unit, opts.river) * wallMul;
+  const match = opts.vs ? r.battle.matchup[opts.unit][opts.vs] : 1;
+  const wallMul = opts.wall !== undefined ? defenseMultiplier({ defense: opts.wall }, opts.vs === 'siege', r) : 1;
+  return trainingMul * aptMul * match * terrainMul(opts.unit, opts.river, r) * wallMul;
 }
 
 /**
@@ -167,20 +164,21 @@ export function clashLosses(
   bQ: number,
   noiseA = 1,
   noiseB = 1,
+  k = DEFAULT_RULES.battle.k,
 ): { aLoss: number; bLoss: number; bExcess: number } {
-  const base = BATTLE_K * Math.sqrt(aCount * bCount);
+  const base = k * Math.sqrt(aCount * bCount);
   const rawB = Math.round(base * Math.sqrt(aQ / bQ) * noiseB);
   return {
     aLoss: Math.min(aCount, Math.round(base * Math.sqrt(bQ / aQ) * noiseA)),
     bLoss: Math.min(bCount, rawB),
-    bExcess: excessAfterWipe(aCount, aQ, bCount, bQ, noiseB),
+    bExcess: excessAfterWipe(aCount, aQ, bCount, bQ, noiseB, k),
   };
 }
 
 /** B측 투입분 전멸 후 남는 A측 병력이 가하는 피해 (병력 단위) */
-export function excessAfterWipe(aCount: number, aQ: number, bCount: number, bQ: number, noise = 1): number {
+export function excessAfterWipe(aCount: number, aQ: number, bCount: number, bQ: number, noise = 1, k = DEFAULT_RULES.battle.k): number {
   if (aCount <= 0 || bCount <= 0) return 0;
-  const rate = BATTLE_K * Math.sqrt(aQ / bQ) * noise;
+  const rate = k * Math.sqrt(aQ / bQ) * noise;
   // 원시 피해 K×√(a×b)×√(aQ/bQ)×noise = b 가 되는 a
   const need = bCount / (rate * rate);
   const spare = aCount - need;
@@ -190,8 +188,13 @@ export function excessAfterWipe(aCount: number, aQ: number, bCount: number, bQ: 
 /**
  * 남은 피해(병력 단위)를 성벽 피해로 환산하고, 성벽이 감당하지 못한 나머지를 예비대 피해(병력)로 돌려준다.
  */
-export function excessToWall(excess: number, wallLeft: number, siegeMul = 1): { wall: number; reserveTroops: number } {
-  const perTroop = WALL_PER_EXCESS_TROOP * siegeMul;
+export function excessToWall(
+  excess: number,
+  wallLeft: number,
+  siegeMul = 1,
+  perExcess = DEFAULT_RULES.battle.wallPerExcessTroop,
+): { wall: number; reserveTroops: number } {
+  const perTroop = perExcess * siegeMul;
   const asWall = excess * perTroop;
   const wall = Math.min(wallLeft, asWall);
   return { wall, reserveTroops: Math.round((asWall - wall) / perTroop) };
@@ -212,6 +215,8 @@ export function resolveBattle(state: GameState, army: Army, targetId: string, rn
     return;
   }
 
+  const R = state.rules;
+  const B = R.battle;
   const defenderFaction = target.owner;
   const defenderName = factionName(state, defenderFaction);
   const defGenerals = defenderFaction ? generalsIn(state, target.id, defenderFaction) : [];
@@ -257,7 +262,7 @@ export function resolveBattle(state: GameState, army: Army, targetId: string, rn
       outcome = 'annihilated';
       break;
     }
-    const need = Math.ceil(sumUnits(att) / 200);
+    const need = Math.ceil(sumUnits(att) / B.foodPerRoundDiv);
     if (food < need) {
       outcome = 'starved';
       break;
@@ -287,6 +292,7 @@ export function resolveBattle(state: GameState, army: Army, targetId: string, rn
         training: army.training,
         general: aGen,
         river,
+        rules: R,
       });
       const aPower = aCount * aQ;
       let wallDamage = 0;
@@ -298,24 +304,25 @@ export function resolveBattle(state: GameState, army: Army, targetId: string, rn
           general: dGen,
           river,
           wall: target.defense,
+          rules: R,
         });
-        const { aLoss, bLoss, bExcess } = clashLosses(aCount, aQ, dCount, dQ, rng.range(0.9, 1.1), rng.range(0.9, 1.1));
+        const { aLoss, bLoss, bExcess } = clashLosses(aCount, aQ, dCount, dQ, rng.range(0.9, 1.1), rng.range(0.9, 1.1), B.k);
         att[ap!.unit] -= aLoss;
         def[dp!.unit] -= bLoss;
         (round.att as BattleSide).loss = aLoss;
         (round.def as BattleSide).loss = bLoss;
-        const siegeMul = ap!.unit === 'siege' ? SIEGE_WALL_MUL : 1;
-        if (ap!.unit === 'siege') wallDamage = (aPower / WALL_DAMAGE_DIV) * SIEGE_WALL_MUL * 0.5;
+        const siegeMul = ap!.unit === 'siege' ? B.siegeWallMul : 1;
+        if (ap!.unit === 'siege') wallDamage = (aPower / B.wallDamageDiv) * B.siegeWallMul * 0.5;
         if (bExcess > 0) {
           // 수비 투입분 전멸 후 남은 피해 → 성벽, 성벽이 바닥나면 예비대
-          const spill = excessToWall(bExcess, Math.max(0, target.defense - wallDamage), siegeMul);
+          const spill = excessToWall(bExcess, Math.max(0, target.defense - wallDamage), siegeMul, B.wallPerExcessTroop);
           wallDamage += spill.wall;
           if (spill.reserveTroops > 0) round.reserveLoss = removeProportional(def, spill.reserveTroops);
         }
       } else {
         // 수비가 비운 라운드: 예비대와 성벽 타격
-        round.reserveLoss = removeProportional(def, Math.round(aPower * EMPTY_ROUND_RESERVE_RATE * rng.range(0.9, 1.1)));
-        wallDamage = (aPower / WALL_DAMAGE_DIV) * (ap!.unit === 'siege' ? SIEGE_WALL_MUL : 1);
+        round.reserveLoss = removeProportional(def, Math.round(aPower * B.emptyRoundReserveRate * rng.range(0.9, 1.1)));
+        wallDamage = (aPower / B.wallDamageDiv) * (ap!.unit === 'siege' ? B.siegeWallMul : 1);
       }
       round.wallDamage = Math.min(target.defense, Math.round(wallDamage));
       target.defense -= round.wallDamage;
@@ -439,7 +446,7 @@ function captureCity(
   city.owner = army.faction;
   city.units = { ...army.units };
   city.training = army.training;
-  city.defensePlan = null;
+  resetCityOwnership(city);
   city.food = Math.floor(city.food * 0.5) + food;
   city.gold = Math.floor(city.gold * 0.5);
   city.loyalty = clamp(city.loyalty - 10, 0, 100);

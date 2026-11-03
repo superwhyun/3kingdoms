@@ -79,3 +79,22 @@ export function josa(word: string, withFinal: string, withoutFinal: string): str
   if (code < 0xac00 || code > 0xd7a3) return word + withoutFinal;
   return word + ((code - 0xac00) % 28 ? withFinal : withoutFinal);
 }
+
+/** 도시를 잃었을 때 그 도시의 아군 장수를 다른 아군 도시로 피신시킨다 */
+export function evacuateGenerals(state: GameState, city: CityState, faction: string): void {
+  const mine = citiesOf(state, faction).filter((c) => c.id !== city.id);
+  const dest = mine.find((c) => isAdjacent(state, c.id, city.id)) ?? mine[0];
+  if (!dest) return; // 마지막 도시: 세력 멸망 처리에서 재야로 돌아간다
+  for (const g of Object.values(state.generals)) {
+    if (g.status === 'active' && g.faction === faction && g.city === city.id) g.city = dest.id;
+  }
+}
+
+/** 소유자가 바뀐 도시의 세력 귀속 정보를 초기화한다 */
+export function resetCityOwnership(city: CityState): void {
+  city.governor = null;
+  city.construction = null;
+  city.tax = 'normal';
+  city.defensePlan = null;
+}
+

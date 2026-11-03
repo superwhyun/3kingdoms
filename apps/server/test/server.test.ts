@@ -154,6 +154,56 @@ describe('server', () => {
     expect(va.cities.find((x: { id: string }) => x.id === 'pingyuan').defensePlan).toBeNull();
   });
 
+  it('admin: first user is admin, can grant admin, edit default and per-game rules', async () => {
+    const { app } = await setup();
+    const a = await call(app, 'POST', '/api/register', undefined, { name: 'boss', password: 'secret1' });
+    const b = await call(app, 'POST', '/api/register', undefined, { name: 'pleb', password: 'secret1' });
+    expect(a.body.user.isAdmin).toBe(true);
+    expect(b.body.user.isAdmin).toBe(false);
+    const ta = a.body.token;
+    const tb = b.body.token;
+
+    expect((await call(app, 'GET', '/api/admin/rules', tb)).status).toBe(403);
+    expect((await call(app, 'PUT', '/api/admin/rules', ta, { overrides: { battle: { nope: 1 } } })).status).toBe(400);
+    const put = await call(app, 'PUT', '/api/admin/rules', ta, { overrides: { battle: { k: 0.4, siegeWallMul: 5 } } });
+    expect(put.status).toBe(200);
+    // 기본값과 같은 항목은 저장되지 않는다
+    expect(put.body.overrides).toEqual({ battle: { k: 0.4 } });
+
+    // 새 게임은 그 시점의 기본 규칙을 복사한다
+    const g = await call(app, 'POST', '/api/games', tb, { name: 'r', scenarioId: 'y190', turnMinutes: 60 });
+    const st = await call(app, 'GET', `/api/games/${g.body.id}/state`, tb);
+    expect(st.body.view.rules.battle.k).toBe(0.4);
+    await call(app, 'PUT', '/api/admin/rules', ta, { overrides: {} });
+    const st2 = await call(app, 'GET', `/api/games/${g.body.id}/state`, tb);
+    expect(st2.body.view.rules.battle.k).toBe(0.4);
+
+    // 게임별 규칙 수정
+    expect((await call(app, 'PATCH', `/api/admin/games/${g.body.id}/rules`, tb, { patch: { battle: { k: 0.3 } } })).status).toBe(403);
+    const gp = await call(app, 'PATCH', `/api/admin/games/${g.body.id}/rules`, ta, { patch: { economy: { incomeDiv: 1 } } });
+    expect(gp.status).toBe(200);
+    expect(gp.body.rules.economy.incomeDiv).toBe(1);
+    expect(gp.body.rules.battle.k).toBe(0.4);
+
+    // 권한 부여·해제
+    const users = await call(app, 'POST', `/api/admin/users/${b.body.user.id}`, ta, { isAdmin: true });
+    expect(users.body.find((u: { name: string }) => u.name === 'pleb').isAdmin).toBe(true);
+    expect((await call(app, 'GET', '/api/admin/users', tb)).status).toBe(200);
+    expect((await call(app, 'POST', `/api/admin/users/${b.body.user.id}`, tb, { isAdmin: false })).status).toBe(200);
+    expect((await call(app, 'POST', `/api/admin/users/${a.body.user.id}`, ta, { isAdmin: false })).status).toBe(400);
+    expect((await call(app, 'GET', '/api/me', ta)).body.user.isAdmin).toBe(true);
+  });
+
+  it('admin can force-resolve a running game', async () => {
+    const { app } = await setup();
+    const a = await call(app, 'POST', '/api/register', undefined, { name: 'boss', password: 'secret1' });
+    const g = await call(app, 'POST', '/api/games', a.body.token, { name: 'f', scenarioId: 'y190', turnMinutes: 600 });
+    await call(app, 'POST', `/api/games/${g.body.id}/seat`, a.body.token, { factionId: 'caocao' });
+    await call(app, 'POST', `/api/games/${g.body.id}/start`, a.body.token);
+    const r = await call(app, 'POST', `/api/admin/games/${g.body.id}/resolve`, a.body.token);
+    expect(r.body.turn).toBe(1);
+  });
+
   it('requires auth for mutations', async () => {
     const { app } = await setup();
     expect((await call(app, 'POST', '/api/games', undefined, { name: 'x', scenarioId: 'y190', turnMinutes: 5 })).status).toBe(401);

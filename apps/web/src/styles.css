@@ -159,3 +159,21 @@ button.link.danger { color: var(--warn); }
 .plan-table th:nth-child(2), .plan-table td:nth-child(2) { width: 38%; }
 .plan-table th:nth-child(3), .plan-table td:nth-child(3) { width: 26%; }
 .plan-table th:nth-child(4), .plan-table td:nth-child(4) { width: 30%; }
+
+.ok { background: #d8efe0; color: #1e5b37; padding: 8px 12px; border-radius: 6px; margin: 8px 0; }
+.admin-tabs { max-width: 1000px; margin: 0 auto; }
+.admin-body { max-width: 1000px; margin: 0 auto; padding: 16px; }
+.rules-editor { margin-top: 12px; }
+.rules-editor > input { width: 100%; margin-bottom: 8px; }
+.rule-group { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 6px; }
+.rule-head { width: 100%; text-align: left; background: none; color: var(--ink); border: none; font-weight: 600; }
+.rule-body { padding: 0 10px 8px; }
+.rule-subhead { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.rule-sub > .rule-body { padding: 0 0 0 12px; border-left: 2px solid var(--line); }
+.rule-row { display: grid; grid-template-columns: minmax(0, 1fr) 110px 90px auto; gap: 8px; align-items: center; padding: 2px 0; }
+.rule-row input { padding: 3px 6px; }
+.rule-row.changed .rule-label { color: var(--accent); font-weight: 600; }
+.rule-hint { white-space: nowrap; }
+.badge.changed { border-color: var(--accent); color: var(--accent); }
+label.inline { display: inline-flex; flex-direction: row; margin: 0; }
+@media (max-width: 600px) { .rule-row { grid-template-columns: minmax(0, 1fr) 90px; } .rule-hint { display: none; } }

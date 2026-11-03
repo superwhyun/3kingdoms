@@ -11,7 +11,7 @@ export function formatMinutes(m: number): string {
 }
 
 export function Lobby() {
-  const { user, setUser, openGame } = useApp();
+  const { user, setUser, openGame, openAdmin } = useApp();
   const [games, setGames] = useState<GameSummary[]>([]);
   const [scenarios, setScenarios] = useState<ScenarioInfo[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
@@ -47,6 +47,11 @@ export function Lobby() {
         <h1 className="title">천하삼분</h1>
         <span className="spacer" />
         <span>{user!.name}</span>
+        {user!.isAdmin && (
+          <button className="secondary" onClick={() => openAdmin(true)}>
+            admin
+          </button>
+        )}
         <button
           className="secondary"
           onClick={async () => {
